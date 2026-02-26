@@ -6,7 +6,7 @@
 
 **Claude Context Sync** is a CLI tool that exports and imports Claude Code sessions between devices. It solves the problem of absolute path differences between machines using a smart path-transformation system.
 
-**Current version: 0.3.0**
+**Current version: 0.4.0**
 
 **Features:**
 - Full session transfer: messages, file-history, and todos
@@ -18,8 +18,11 @@
 - Descriptive Git commit labels (project name + first prompt)
 - SHA256 integrity validation
 - Backwards-compatible with older bundles (v1.0.0)
+- **Automatic sync hooks** — SessionEnd/SessionStart integration with Claude Code (`hooks-install`)
+- **Optional AES-256-GCM encryption** — passphrase-based, no raw key files to manage (`--encrypt`)
+- **Structured logs** — `hook.log` for automatic sync, `--verbose` for manual commands
 
-> **Platform support:** Fully tested on Windows. Linux and macOS support is planned for v0.4.0 — it likely works already with minor adaptations. Community testing welcome!
+> **Platform support:** Fully tested on Windows. Linux and macOS support is planned — it likely works already with minor adaptations. Community testing welcome!
 
 ## The Problem
 
@@ -450,15 +453,19 @@ The URL is saved in `config/path_mappings.json` and can be overwritten at any ti
 Export a session and push it to the Git repository.
 
 ```bash
-claude-sync sync-push [SESSION_ID] [--repo URL] [--output NAME] [--compress]
+claude-sync sync-push [SESSION_ID] [--session UUID] [--repo URL] [--output NAME] [--compress] [--encrypt] [--auto] [--verbose]
 ```
 
 | Option/Argument | Description |
 |---|---|
 | `SESSION_ID` | Session UUID (optional — if omitted, lists sessions in the current project) |
+| `--session UUID` | Alternative to positional argument — useful for scripts and hooks |
 | `--repo` | Git repository URL (optional if set with `claude-sync repo`) |
 | `--output` | Bundle filename (default: `<session-id>.bundle`) |
 | `--compress` | Compress with gzip |
+| `--encrypt` | Encrypt bundle with AES-256-GCM (prompts for passphrase, or uses saved key) |
+| `--auto` | Non-interactive mode for hooks — no prompts, errors logged to `hook.log` |
+| `--verbose` | Write detailed steps to `~/.claude-context-sync/logs/app.log` |
 
 **Without session ID — interactive picker from current project:**
 
@@ -495,7 +502,7 @@ sync: session 097f3474 | my-app | Fix the authentication bug in login
 Pull a bundle from the Git repository and import the session.
 
 ```bash
-claude-sync sync-pull [SESSION_ID_PREFIX] [--repo URL] [--force] [--project-path PATH]
+claude-sync sync-pull [SESSION_ID_PREFIX] [--repo URL] [--force] [--project-path PATH] [--latest] [--auto] [--verbose]
 ```
 
 | Option/Argument | Description |
@@ -504,6 +511,9 @@ claude-sync sync-pull [SESSION_ID_PREFIX] [--repo URL] [--force] [--project-path
 | `--repo` | Git repository URL (optional if set with `claude-sync repo`) |
 | `--force` | Overwrite the session if it already exists locally |
 | `--project-path` | Local project path on this device (default: current directory) |
+| `--latest` | Pull the most recently pushed bundle — used by `SessionStart` hooks |
+| `--auto` | Non-interactive mode for hooks — no prompts, errors logged to `hook.log` |
+| `--verbose` | Write detailed steps to `~/.claude-context-sync/logs/app.log` |
 
 **Without session ID — interactive picker from remote repository:**
 
@@ -560,6 +570,52 @@ Found 3 bundle(s):
 To import a bundle:
   claude-sync sync-pull <sync-pull ID>
 ```
+
+---
+
+### `claude-sync hooks-install`
+
+Install automatic sync hooks in Claude Code. After running this command, sessions are pushed automatically when you close a conversation and pulled when you open Claude Code.
+
+```bash
+claude-sync hooks-install
+```
+
+This writes to `~/.claude/settings.json`:
+- **SessionEnd** → runs `sync-push --session $CLAUDE_SESSION_ID --auto`
+- **SessionStart** → runs `sync-pull --latest --auto`
+
+A backup is saved to `~/.claude/settings.json.bak` before any changes.
+
+Run `hooks-install` on each machine you want to sync automatically. It is **idempotent** — safe to run multiple times.
+
+---
+
+### `claude-sync hooks-uninstall`
+
+Remove the automatic sync hooks from Claude Code settings. Does not affect other hooks.
+
+```bash
+claude-sync hooks-uninstall
+```
+
+---
+
+### `claude-sync crypto-setup`
+
+Configure an encryption passphrase for automatic encrypted sync.
+
+```bash
+claude-sync crypto-setup
+```
+
+The passphrase is used to derive an AES-256 key, which is saved locally at `~/.claude-context-sync/key`. Run this on every machine with the **same passphrase** — sessions encrypted on one machine can then be decrypted on the other automatically.
+
+After setup:
+- `sync-push --auto` will encrypt bundles automatically (no prompt)
+- `sync-pull --auto` will decrypt them automatically (no prompt)
+
+If you prefer to type the passphrase manually each time (without saving a key), just use `sync-push --encrypt` — it will prompt for the passphrase interactively.
 
 ---
 
@@ -705,19 +761,41 @@ ssh -T git@github.com
 ### sync-push fails on empty repo
 Happens on the very first push to a freshly created repository. The tool detects this automatically and skips the pull step. Just run the command normally.
 
+### Automatic hook not syncing
+
+If automatic sync stops working after running `hooks-install`, check the hook log:
+
+- **Windows:** `%USERPROFILE%\.claude-context-sync\logs\hook.log`
+- **Linux/macOS:** `~/.claude-context-sync/logs/hook.log`
+
+The log records every automatic sync attempt with timestamp and error details.
+
+For more detail on a manual command, add `--verbose`:
+
+```bash
+claude-sync sync-push --verbose
+claude-sync sync-pull --verbose
+```
+
+This writes step-by-step output to `~/.claude-context-sync/logs/app.log`.
+
+### "Decryption failed — wrong passphrase or corrupted bundle"
+
+The passphrase entered does not match the one used to encrypt the bundle. Make sure you ran `crypto-setup` with the same passphrase on both machines. If you set up a saved key (`crypto-setup`), the key files on both machines must have been derived from the same passphrase.
+
 ---
 
 ## Limitations
 
-- Manual sync (not automatic/real-time)
-- No conflict resolution — use sessions alternately between devices
+- No conflict resolution — use sessions alternately between devices (push from A, pull on B, work on B, push from B, pull on A)
+- Automatic hooks require `claude-sync` to be on the system PATH — install via `pip install -e .`
 - Requires Git installed and authenticated for Git-based sync
 
 ---
 
 ## Roadmap
 
-### v0.3.0 (current)
+### v0.3.0
 - [x] Full session export: messages, file-history, todos
 - [x] gzip compression (`--compress`)
 - [x] Automatic progress bars
@@ -728,13 +806,20 @@ Happens on the very first push to a freshly created repository. The tool detects
 - [x] Descriptive Git commit labels (project name + first prompt)
 - [x] SHA256 integrity validation
 
-### v0.4.0 (next)
+### v0.4.0 (current)
+- [x] Automatic sync hooks (`hooks-install` / `hooks-uninstall`) — SessionEnd + SessionStart
+- [x] Non-interactive mode (`--auto`) for hook execution
+- [x] Pull most recent bundle (`--latest`) for SessionStart hooks
+- [x] Optional AES-256-GCM encryption (`--encrypt`, `crypto-setup`)
+- [x] Passphrase-derived keys via PBKDF2 — no raw key file management
+- [x] Structured logs: `hook.log` (always) + `app.log` (`--verbose`)
+
+### v0.5.0 (next)
 - [ ] Linux and macOS support
 - [ ] `sync-push --all` to push all sessions from a project at once
 - [ ] `sync-pull --all` to pull all available bundles
 
 ### v1.0.0 (future)
-- [ ] Automatic sync via MCP hooks
 - [ ] Optional cloud backend
 - [ ] Web dashboard
 - [ ] Automatic conflict resolution

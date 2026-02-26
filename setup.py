@@ -2,13 +2,14 @@ from setuptools import setup, find_packages
 
 setup(
     name="claude-context-sync",
-    version="0.3.0",
+    version="0.4.0",
     packages=find_packages(),
     include_package_data=True,
     install_requires=[
         "click>=8.1.0",
         "jsonschema>=4.17.0",
         "tqdm>=4.65.0",
+        "cryptography>=41.0.0",
     ],
     entry_points={
         "console_scripts": [

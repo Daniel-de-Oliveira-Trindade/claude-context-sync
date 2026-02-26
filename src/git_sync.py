@@ -125,7 +125,11 @@ class GitSync:
         self.ensure_repo()
 
         for f in self.local_dir.iterdir():
-            if f.is_file() and f.suffix in ('.bundle', '.gz') and session_id_prefix in f.name:
+            if f.is_file() and session_id_prefix in f.name and (
+                f.suffix == '.bundle'
+                or f.name.endswith('.bundle.gz')
+                or f.name.endswith('.bundle.gz.enc')
+            ):
                 return str(f)
 
         return None
@@ -135,16 +139,57 @@ class GitSync:
         List all bundles available in the repository.
 
         Returns:
-            Sorted list of bundle filenames
+            Sorted list of bundle filenames (includes .bundle, .bundle.gz, .bundle.gz.enc)
         """
         self.ensure_repo()
 
         bundles = []
         for f in self.local_dir.iterdir():
-            if f.is_file() and (f.suffix == '.bundle' or f.name.endswith('.bundle.gz')):
+            if f.is_file() and (
+                f.suffix == '.bundle'
+                or f.name.endswith('.bundle.gz')
+                or f.name.endswith('.bundle.gz.enc')
+            ):
                 bundles.append(f.name)
 
         return sorted(bundles)
+
+    def get_latest_bundle(self) -> Optional[str]:
+        """
+        Return the path to the most recently pushed bundle, based on Git commit order.
+
+        Used by sync-pull --latest (SessionStart hook): pulls only the newest bundle
+        so the user gets the latest session from another machine without interaction.
+
+        Returns:
+            Absolute path to the most recent bundle file, or None if the repo is empty.
+        """
+        self.ensure_repo()
+
+        try:
+            # Get filenames added in each commit, most recent first
+            result = self._run([
+                "git", "log",
+                "--pretty=format:",
+                "--name-only",
+                "--diff-filter=A"
+            ])
+            for line in result.stdout.splitlines():
+                name = line.strip()
+                if not name:
+                    continue
+                if (
+                    name.endswith('.bundle')
+                    or name.endswith('.bundle.gz')
+                    or name.endswith('.bundle.gz.enc')
+                ):
+                    candidate = self.local_dir / name
+                    if candidate.exists():
+                        return str(candidate)
+        except subprocess.CalledProcessError:
+            pass
+
+        return None
 
     def get_bundle_labels(self) -> dict:
         """
