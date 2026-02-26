@@ -813,11 +813,14 @@ The passphrase entered does not match the one used to encrypt the bundle. Make s
 - [x] Optional AES-256-GCM encryption (`--encrypt`, `crypto-setup`)
 - [x] Passphrase-derived keys via PBKDF2 — no raw key file management
 - [x] Structured logs: `hook.log` (always) + `app.log` (`--verbose`)
+- [x] Timestamp in bundle filename (`session_YYYYMMDD-HHMMSS.bundle`) — easy to identify when each bundle was created
+- [x] `import` command supports encrypted bundles (`.bundle.gz.enc`) directly
 
 ### v0.5.0 (next)
 - [ ] Linux and macOS support
 - [ ] `sync-push --all` to push all sessions from a project at once
 - [ ] `sync-pull --all` to pull all available bundles
+- [ ] **Local bundle backup** — keep a copy of every pushed/pulled bundle in `~/.claude-context-sync/backups/` so sessions are never lost even if the remote is unavailable or a push overwrites a previous version on the same machine
 
 ### v1.0.0 (future)
 - [ ] Optional cloud backend

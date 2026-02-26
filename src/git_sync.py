@@ -219,7 +219,11 @@ class GitSync:
                     current_msg = line[7:]  # strip "COMMIT:" prefix
                 elif line.strip() and not line.startswith("COMMIT:"):
                     filename = line.strip()
-                    if filename and (filename.endswith('.bundle') or filename.endswith('.bundle.gz')):
+                    if filename and (
+                        filename.endswith('.bundle')
+                        or filename.endswith('.bundle.gz')
+                        or filename.endswith('.bundle.gz.enc')
+                    ):
                         labels[filename] = current_msg
         except subprocess.CalledProcessError:
             pass  # Empty repo or no commits — return empty dict

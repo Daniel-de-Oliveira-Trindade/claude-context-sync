@@ -189,7 +189,7 @@ def export(session_id, output, compress):
 @click.option('--project-path', default=None,
               help='Local project path on this device (default: current directory)')
 def import_cmd(bundle_path, force, project_path):
-    """Import a session from bundle file (.bundle or .bundle.gz)"""
+    """Import a session from bundle file (.bundle, .bundle.gz, or .bundle.gz.enc)"""
     try:
         resolved = project_path or str(Path.cwd())
         click.echo(f"Importing session from: {bundle_path}")
@@ -198,6 +198,28 @@ def import_cmd(bundle_path, force, project_path):
             click.echo(f"  (use --project-path to change)\n")
         else:
             click.echo()
+
+        # Decrypt if bundle is encrypted
+        if bundle_path.endswith(".enc"):
+            from .crypto import decrypt_bundle, load_key, EncryptionKeyNotFound
+
+            try:
+                key = load_key()
+                passphrase = None
+            except EncryptionKeyNotFound:
+                passphrase = click.prompt("Bundle is encrypted. Enter passphrase", hide_input=True)
+                key = None
+
+            with open(bundle_path, "rb") as f:
+                encrypted_data = f.read()
+            decrypted = decrypt_bundle(encrypted_data, key=key, passphrase=passphrase)
+
+            # Escreve temporariamente sem o .enc para importar normalmente
+            decrypted_path = bundle_path[:-4]
+            with open(decrypted_path, "wb") as f:
+                f.write(decrypted)
+            bundle_path = decrypted_path
+            click.echo(f"[OK] Bundle decrypted: {Path(bundle_path).name}\n")
 
         importer = SessionImporter()
         success = importer.import_session(bundle_path, force=force, project_path_override=resolved)
@@ -355,9 +377,11 @@ def sync_push(session_id, session_opt, repo, output, compress, encrypt, auto, ve
             session_id = sessions[choice - 1]['sessionId']
             click.echo()
 
-        # Default output name includes session-id to avoid collisions
+        # Default output name includes session-id + timestamp to avoid collisions
         if output is None:
-            output = f"{session_id}.bundle"
+            from datetime import datetime
+            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+            output = f"{session_id}_{ts}.bundle"
 
         # 1. Gather metadata for descriptive commit label
         label = ""
@@ -369,8 +393,10 @@ def sync_push(session_id, session_opt, repo, output, compress, encrypt, auto, ve
                 first_prompt = meta.get('firstPrompt', '')[:50]
                 project_path = meta.get('projectPath') or meta.get('fullPath', '')
                 if project_path:
-                    clean = project_path.replace('${PROJECTS}/', '').replace('${HOME}/', '').replace('\\', '/')
-                    project_name = Path(clean).parts[0] if Path(clean).parts else project_dir.name.split('--')[-1]
+                    clean = project_path.replace('${PROJECTS}/', '').replace('${HOME}/', '')
+                    # Use the last path component as project name (works for both
+                    # template paths like "${PROJECTS}/myapp" and absolute paths)
+                    project_name = Path(clean).name or project_dir.name.split('--')[-1]
                 else:
                     project_name = project_dir.name.split('--')[-1]
                 label = f"{project_name} | {first_prompt}"
@@ -722,7 +748,12 @@ def crypto_setup():
     """
     try:
         from .crypto import setup_key
+    except ImportError:
+        click.echo("Error: the 'cryptography' package is required for encryption.", err=True)
+        click.echo("Install it with:\n  pip install cryptography", err=True)
+        raise click.Abort()
 
+    try:
         passphrase = click.prompt("Enter passphrase", hide_input=True)
         confirm = click.prompt("Confirm passphrase", hide_input=True)
 
@@ -739,6 +770,8 @@ def crypto_setup():
         click.echo(f"\nRun this command with the same passphrase on every machine.")
         click.echo(f"sync-push will now encrypt bundles automatically when using --auto.")
 
+    except click.Abort:
+        raise
     except Exception as e:
         click.echo(f"[ERROR] Error setting up encryption: {e}", err=True)
         raise click.Abort()
