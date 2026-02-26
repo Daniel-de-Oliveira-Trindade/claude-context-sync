@@ -1,0 +1,17 @@
+{
+  "devices": {
+    "desktop": {
+      "USER": "daniel",
+      "HOME": "C:/Users/daniel",
+      "PROJECTS": "C:/Users/daniel/Documents/projetos",
+      "CLAUDE_DIR": "C:/Users/daniel/.claude"
+    },
+    "laptop": {
+      "USER": "felipe",
+      "HOME": "C:/Users/felipe",
+      "PROJECTS": "D:/Projects",
+      "CLAUDE_DIR": "C:/Users/felipe/.claude"
+    }
+  },
+  "currentDevice": "desktop"
+}

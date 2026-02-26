@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+config/path_mappings.json
+*.bundle
+*.bundle.gz
+test_output/
+
+# Claude Code local data (personal, not for sharing)
+.claude/
+
+# pip install -e artifacts
+*.egg-info/
