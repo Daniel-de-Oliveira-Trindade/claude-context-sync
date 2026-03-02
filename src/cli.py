@@ -201,20 +201,18 @@ def import_cmd(bundle_path, force, project_path):
 
         # Decrypt if bundle is encrypted
         if bundle_path.endswith(".enc"):
-            from .crypto import decrypt_bundle, load_key, EncryptionKeyNotFound
+            from .crypto import decrypt_bundle, load_passphrase, PassphraseNotFound
 
             try:
-                key = load_key()
-                passphrase = None
-            except EncryptionKeyNotFound:
+                passphrase = load_passphrase()
+            except PassphraseNotFound:
                 passphrase = click.prompt("Bundle is encrypted. Enter passphrase", hide_input=True)
-                key = None
 
             with open(bundle_path, "rb") as f:
                 encrypted_data = f.read()
-            decrypted = decrypt_bundle(encrypted_data, key=key, passphrase=passphrase)
+            decrypted = decrypt_bundle(encrypted_data, passphrase=passphrase)
 
-            # Escreve temporariamente sem o .enc para importar normalmente
+            # Write decrypted bytes to a temp file (strip .enc) and import normally
             decrypted_path = bundle_path[:-4]
             with open(decrypted_path, "wb") as f:
                 f.write(decrypted)
@@ -242,7 +240,11 @@ def import_cmd(bundle_path, force, project_path):
         raise click.Abort()
 
     except Exception as e:
-        click.echo(f"[ERROR] Error during import: {e}", err=True)
+        import json as _json
+        if isinstance(e, _json.JSONDecodeError):
+            click.echo("[ERROR] Failed to read bundle — the file may be corrupted or decryption used the wrong key/passphrase.", err=True)
+        else:
+            click.echo(f"[ERROR] Error during import: {e}", err=True)
         raise click.Abort()
 
 
@@ -415,26 +417,23 @@ def sync_push(session_id, session_opt, repo, output, compress, encrypt, auto, ve
 
         # 3. Optionally encrypt the bundle
         if encrypt:
-            from .crypto import encrypt_bundle, load_key, EncryptionKeyNotFound
+            from .crypto import encrypt_bundle, load_passphrase, PassphraseNotFound
 
             try:
-                key = load_key()
-                passphrase = None
-            except EncryptionKeyNotFound:
+                passphrase = load_passphrase()
+            except PassphraseNotFound:
                 if auto:
-                    # In auto mode, no key file means no encryption — skip silently
-                    key = None
-                    passphrase = None
+                    # In auto mode, no saved passphrase means skip encryption silently
                     encrypt = False
+                    passphrase = None
                 else:
                     passphrase = click.prompt("Encryption passphrase", hide_input=True)
-                    key = None
 
             if encrypt:
                 encrypted_output = final_output + ".enc"
                 with open(final_output, "rb") as f:
                     data = f.read()
-                encrypted = encrypt_bundle(data, key=key, passphrase=passphrase)
+                encrypted = encrypt_bundle(data, passphrase=passphrase)
                 with open(encrypted_output, "wb") as f:
                     f.write(encrypted)
                 import os
@@ -580,23 +579,21 @@ def sync_pull(session_id_prefix, repo, force, project_path, latest, auto, verbos
 
         # Decrypt if bundle is encrypted
         if bundle_path.endswith(".enc"):
-            from .crypto import decrypt_bundle, load_key, EncryptionKeyNotFound
+            from .crypto import decrypt_bundle, load_passphrase, PassphraseNotFound
 
             try:
-                key = load_key()
-                passphrase = None
-            except EncryptionKeyNotFound:
+                passphrase = load_passphrase()
+            except PassphraseNotFound:
                 if auto:
-                    err = Exception("Bundle is encrypted but no key found. Run 'claude-sync crypto-setup' first.")
+                    err = Exception("Bundle is encrypted but no passphrase saved. Run 'claude-sync crypto-setup' first.")
                     logger.log_hook("sync-pull", "", "ERROR", err)
                     sys.exit(1)
                 else:
                     passphrase = click.prompt("Bundle is encrypted. Enter passphrase", hide_input=True)
-                    key = None
 
             with open(bundle_path, "rb") as f:
                 encrypted_data = f.read()
-            decrypted = decrypt_bundle(encrypted_data, key=key, passphrase=passphrase)
+            decrypted = decrypt_bundle(encrypted_data, passphrase=passphrase)
 
             # Write decrypted to temp file (strip .enc extension)
             decrypted_path = bundle_path[:-4]
@@ -737,14 +734,14 @@ def hooks_uninstall():
 
 @cli.command('crypto-setup')
 def crypto_setup():
-    """Configure an encryption passphrase for automatic encrypted sync.
+    """Save an encryption passphrase for automatic encrypted sync.
 
-    The passphrase is used to derive an AES-256 key, which is saved locally.
+    The passphrase is saved locally and used to encrypt/decrypt bundles.
     Run this command with the SAME passphrase on every machine you use —
-    the system will then encrypt and decrypt bundles automatically.
+    bundles encrypted on one machine will then be decryptable on any other.
 
-    To use encryption manually (without saving the key), pass --encrypt to
-    sync-push and enter the passphrase each time.
+    To use encryption without saving the passphrase, pass --encrypt to
+    sync-push and enter the passphrase each time when prompted.
     """
     try:
         from .crypto import setup_key
@@ -765,10 +762,10 @@ def crypto_setup():
             click.echo("[ERROR] Passphrase must be at least 8 characters.", err=True)
             raise click.Abort()
 
-        key_path = setup_key(passphrase)
-        click.echo(f"\n[OK] Encryption key saved to: {key_path}")
+        saved_path = setup_key(passphrase)
+        click.echo(f"\n[OK] Passphrase saved to: {saved_path}")
         click.echo(f"\nRun this command with the same passphrase on every machine.")
-        click.echo(f"sync-push will now encrypt bundles automatically when using --auto.")
+        click.echo(f"sync-push will now encrypt bundles automatically when using --encrypt or --auto.")
 
     except click.Abort:
         raise

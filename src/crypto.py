@@ -8,6 +8,7 @@ Key derivation:
   - Algorithm: PBKDF2-HMAC-SHA256
   - Iterations: 600,000 (OWASP 2024 recommendation)
   - Key length: 256-bit (32 bytes)
+  - Salt: random per bundle (embedded in the encrypted output)
 
 Encryption:
   - Algorithm: AES-256-GCM (authenticated encryption)
@@ -17,10 +18,16 @@ Encryption:
 Bundle format (encrypted):
   Salt (16 bytes) || IV (12 bytes) || AuthTag (16 bytes) || Ciphertext
 
-Stored key format (crypto-setup):
-  A fixed salt per machine is used so the same passphrase always produces
-  the same key on the same machine. Key is stored as raw bytes in
-  ~/.claude-context-sync/key with mode 0600.
+The bundle salt is random and unique per encryption. Because the key is always
+derived from (passphrase + bundle_salt), the same passphrase works on any
+machine — no machine-specific state is needed for decryption.
+
+Stored passphrase format (crypto-setup):
+  The passphrase is XOR-obfuscated with a machine-specific pad so it is not
+  stored in plain text. The obfuscation pad is derived via PBKDF2 from a
+  machine-specific salt. This is NOT cryptographic protection of the passphrase
+  — it only prevents casual inspection. Anyone with access to both files can
+  recover the passphrase.
 """
 
 import os
@@ -39,7 +46,7 @@ except ImportError:
     )
 
 KEY_DIR = Path.home() / ".claude-context-sync"
-KEY_FILE = KEY_DIR / "key"
+PASSPHRASE_FILE = KEY_DIR / "passphrase"
 MACHINE_SALT_FILE = KEY_DIR / "salt"
 
 PBKDF2_ITERATIONS = 600_000
@@ -48,19 +55,17 @@ SALT_LENGTH = 16
 IV_LENGTH = 12
 
 
-class EncryptionKeyNotFound(Exception):
-    """Raised when the local key file does not exist."""
+class PassphraseNotFound(Exception):
+    """Raised when the saved passphrase file does not exist."""
     pass
 
 
-def _get_or_create_machine_salt() -> bytes:
-    """
-    Return the machine-specific salt, creating it if it doesn't exist.
+# Keep old name as alias so existing call-sites don't break
+EncryptionKeyNotFound = PassphraseNotFound
 
-    Using a fixed salt per machine means the same passphrase always
-    produces the same key on the same machine, enabling automatic
-    hook-based encryption without prompts.
-    """
+
+def _get_or_create_machine_salt() -> bytes:
+    """Return the machine-specific salt, creating it if it doesn't exist."""
     KEY_DIR.mkdir(parents=True, exist_ok=True)
 
     if MACHINE_SALT_FILE.exists():
@@ -72,8 +77,23 @@ def _get_or_create_machine_salt() -> bytes:
     return salt
 
 
+def _machine_obfuscation_pad(length: int) -> bytes:
+    """
+    Derive a deterministic pad from the machine salt.
+    Used to XOR-obfuscate the stored passphrase (not cryptographic security).
+    """
+    machine_salt = _get_or_create_machine_salt()
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=length,
+        salt=machine_salt,
+        iterations=1,  # Just a pad, not a security KDF
+    )
+    return kdf.derive(b"claude-context-sync-pad")
+
+
 def _derive_key(passphrase: str, salt: bytes) -> bytes:
-    """Derive a 256-bit AES key from a passphrase using PBKDF2-HMAC-SHA256."""
+    """Derive a 256-bit AES key from a passphrase + salt using PBKDF2-HMAC-SHA256."""
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=KEY_LENGTH,
@@ -93,102 +113,109 @@ def _set_permissions_600(path: Path) -> None:
 
 def setup_key(passphrase: str) -> str:
     """
-    Derive and save the encryption key from a passphrase.
+    Save the passphrase locally (XOR-obfuscated with a machine-specific pad).
 
-    Uses the machine-specific salt so the same passphrase on the same
-    machine always produces the same key. Run this on every machine with
-    the same passphrase to enable cross-machine decryption.
+    The passphrase — not a derived key — is stored, so the same passphrase
+    can correctly decrypt bundles created on any machine. Run this command
+    with the same passphrase on every device.
 
     Args:
         passphrase: User-provided passphrase (min 8 characters recommended)
 
     Returns:
-        Path to the saved key file as a string
+        Path to the saved passphrase file as a string
     """
     KEY_DIR.mkdir(parents=True, exist_ok=True)
-    salt = _get_or_create_machine_salt()
-    key = _derive_key(passphrase, salt)
-    KEY_FILE.write_bytes(key)
-    _set_permissions_600(KEY_FILE)
-    return str(KEY_FILE)
+    raw = passphrase.encode("utf-8")
+    pad = _machine_obfuscation_pad(len(raw))
+    obfuscated = bytes(a ^ b for a, b in zip(raw, pad))
+    # Prefix with the length so we know how many bytes to read back
+    PASSPHRASE_FILE.write_bytes(len(raw).to_bytes(2, "big") + obfuscated)
+    _set_permissions_600(PASSPHRASE_FILE)
+    return str(PASSPHRASE_FILE)
+
+
+def load_passphrase() -> str:
+    """
+    Load the saved passphrase from ~/.claude-context-sync/passphrase.
+
+    Returns:
+        The plaintext passphrase string
+
+    Raises:
+        PassphraseNotFound: If the passphrase file does not exist
+    """
+    if not PASSPHRASE_FILE.exists():
+        raise PassphraseNotFound(
+            f"No saved passphrase found at {PASSPHRASE_FILE}.\n"
+            "Run 'claude-sync crypto-setup' to configure one."
+        )
+    data = PASSPHRASE_FILE.read_bytes()
+    length = int.from_bytes(data[:2], "big")
+    obfuscated = data[2:2 + length]
+    pad = _machine_obfuscation_pad(length)
+    return bytes(a ^ b for a, b in zip(obfuscated, pad)).decode("utf-8")
 
 
 def load_key() -> bytes:
     """
-    Load the saved key from ~/.claude-context-sync/key.
+    Compatibility shim: kept so call-sites that imported load_key() still work.
+    Raises PassphraseNotFound (same base class as EncryptionKeyNotFound).
 
-    Returns:
-        Raw 32-byte AES key
-
-    Raises:
-        EncryptionKeyNotFound: If the key file does not exist
+    Use load_passphrase() in new code.
     """
-    if not KEY_FILE.exists():
-        raise EncryptionKeyNotFound(
-            f"No encryption key found at {KEY_FILE}.\n"
-            "Run 'claude-sync crypto-setup' to configure one."
-        )
-    return KEY_FILE.read_bytes()
+    raise PassphraseNotFound(
+        "load_key() is no longer used. Use load_passphrase() instead."
+    )
 
 
-def encrypt_bundle(data: bytes, key: Optional[bytes] = None, passphrase: Optional[str] = None) -> bytes:
+def encrypt_bundle(data: bytes, passphrase: str) -> bytes:
     """
     Encrypt bundle data with AES-256-GCM.
 
-    Exactly one of `key` or `passphrase` must be provided.
+    A fresh random salt is generated for each encryption and embedded in the
+    output. The key is derived from (passphrase + bundle_salt), so the same
+    passphrase on any machine can decrypt the bundle.
 
     Bundle format:
         Salt (16 bytes) || IV (12 bytes) || AuthTag (16 bytes) || Ciphertext
 
     Args:
         data: Raw bundle bytes to encrypt
-        key: 32-byte AES key (from load_key())
-        passphrase: Passphrase to derive key from (for manual one-time use)
+        passphrase: Plaintext passphrase
 
     Returns:
         Encrypted bundle bytes
     """
-    if key is None and passphrase is None:
-        raise ValueError("Either 'key' or 'passphrase' must be provided")
-
-    # Generate a fresh random salt for this encryption (included in output)
     salt = os.urandom(SALT_LENGTH)
-
-    if key is None:
-        key = _derive_key(passphrase, salt)
-
+    key = _derive_key(passphrase, salt)
     iv = os.urandom(IV_LENGTH)
     aesgcm = AESGCM(key)
 
-    # AESGCM.encrypt returns ciphertext + auth_tag concatenated
     ct_with_tag = aesgcm.encrypt(iv, data, None)
-    # GCM auth tag is always the last 16 bytes
     auth_tag = ct_with_tag[-16:]
     ciphertext = ct_with_tag[:-16]
 
     return salt + iv + auth_tag + ciphertext
 
 
-def decrypt_bundle(data: bytes, key: Optional[bytes] = None, passphrase: Optional[str] = None) -> bytes:
+def decrypt_bundle(data: bytes, passphrase: str) -> bytes:
     """
     Decrypt an AES-256-GCM encrypted bundle.
 
-    Exactly one of `key` or `passphrase` must be provided.
+    The key is always derived from (passphrase + bundle_salt) where bundle_salt
+    is read from the first 16 bytes of the encrypted data.
 
     Args:
         data: Encrypted bundle bytes (Salt || IV || AuthTag || Ciphertext)
-        key: 32-byte AES key (from load_key())
-        passphrase: Passphrase to derive key from
+        passphrase: Plaintext passphrase
 
     Returns:
         Decrypted bundle bytes
 
     Raises:
-        ValueError: If the data is too short or the tag is invalid (wrong key/passphrase)
+        ValueError: If the data is too short or authentication tag is invalid
     """
-    if key is None and passphrase is None:
-        raise ValueError("Either 'key' or 'passphrase' must be provided")
-
     min_length = SALT_LENGTH + IV_LENGTH + 16  # salt + iv + auth_tag
     if len(data) < min_length:
         raise ValueError("Encrypted data is too short — may be corrupted")
@@ -198,13 +225,10 @@ def decrypt_bundle(data: bytes, key: Optional[bytes] = None, passphrase: Optiona
     auth_tag = data[SALT_LENGTH + IV_LENGTH:SALT_LENGTH + IV_LENGTH + 16]
     ciphertext = data[SALT_LENGTH + IV_LENGTH + 16:]
 
-    if key is None:
-        key = _derive_key(passphrase, salt)
-
+    key = _derive_key(passphrase, salt)
     aesgcm = AESGCM(key)
 
     try:
-        # AESGCM.decrypt expects ciphertext + auth_tag concatenated
         return aesgcm.decrypt(iv, ciphertext + auth_tag, None)
     except Exception:
         raise ValueError(
