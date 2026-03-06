@@ -10,6 +10,7 @@ command string, which is used to detect and remove them without touching other h
 
 import json
 import shutil
+import sys
 from pathlib import Path
 from typing import Any, Dict
 
@@ -17,24 +18,43 @@ CLAUDE_SETTINGS = Path.home() / ".claude" / "settings.json"
 
 HOOK_MARKER = "claude-context-sync"
 
-HOOKS_TO_INSTALL = {
-    "SessionEnd": {
-        "hooks": [
-            {
-                "type": "command",
-                "command": "claude-context-sync sync-push --session $CLAUDE_SESSION_ID --auto"
-            }
-        ]
-    },
-    "SessionStart": {
-        "hooks": [
-            {
-                "type": "command",
-                "command": "claude-context-sync sync-pull --latest --auto"
-            }
-        ]
+
+def _resolve_executable() -> str:
+    """
+    Return the absolute path to the claude-sync executable.
+
+    Uses the same Python Scripts directory as the currently running interpreter,
+    so the hook works even when the Scripts dir is not in the system PATH.
+    """
+    scripts_dir = Path(sys.executable).parent / "Scripts"
+    for name in ("claude-sync.exe", "claude-sync"):
+        candidate = scripts_dir / name
+        if candidate.exists():
+            return str(candidate)
+    # Fallback: rely on PATH (may fail if not configured)
+    return "claude-sync"
+
+
+def _build_hooks() -> Dict[str, Any]:
+    exe = _resolve_executable()
+    return {
+        "SessionEnd": {
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": f"{exe} sync-push --session $CLAUDE_SESSION_ID --auto"
+                }
+            ]
+        },
+        "SessionStart": {
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": f"{exe} sync-pull --latest --auto"
+                }
+            ]
+        },
     }
-}
 
 
 class HooksManager:
@@ -69,12 +89,17 @@ class HooksManager:
                     return True
         return False
 
-    def install(self) -> Dict[str, str]:
+    def install(self, force: bool = False) -> Dict[str, str]:
         """
         Install SessionEnd and SessionStart hooks into ~/.claude/settings.json.
 
+        Args:
+            force: If True, remove existing claude-context-sync hooks and reinstall
+                   the current version. If False (default), skip events that already
+                   have a hook installed.
+
         Returns:
-            Dict mapping event name to status: "installed" or "already_installed"
+            Dict mapping event name to status: "installed", "already_installed", or "updated"
         """
         backup = self._backup_settings()
         settings = self._read_settings()
@@ -83,11 +108,20 @@ class HooksManager:
             settings["hooks"] = {}
 
         results = {}
+        hooks_to_install = _build_hooks()
 
-        for event, hook_config in HOOKS_TO_INSTALL.items():
+        for event, hook_config in hooks_to_install.items():
             existing = settings["hooks"].get(event, [])
 
-            if self._hook_already_installed(existing):
+            if force:
+                # Remove old claude-context-sync hooks, then add fresh version
+                existing = [
+                    g for g in existing
+                    if not any(HOOK_MARKER in h.get("command", "") for h in g.get("hooks", []))
+                ]
+                settings["hooks"][event] = existing + [hook_config]
+                results[event] = "updated"
+            elif self._hook_already_installed(existing):
                 results[event] = "already_installed"
             else:
                 settings["hooks"][event] = existing + [hook_config]
@@ -95,6 +129,24 @@ class HooksManager:
 
         self._write_settings(settings)
         return results
+
+    def get_installed_commands(self) -> Dict[str, str]:
+        """
+        Return the command strings for currently installed claude-context-sync hooks.
+
+        Returns:
+            Dict mapping event name to command string, only for installed hooks.
+            Example: {"SessionEnd": "claude-context-sync sync-push --session $CLAUDE_SESSION_ID --auto"}
+        """
+        settings = self._read_settings()
+        result = {}
+        for event in _build_hooks():
+            for group in settings.get("hooks", {}).get(event, []):
+                for hook in group.get("hooks", []):
+                    cmd = hook.get("command", "")
+                    if HOOK_MARKER in cmd:
+                        result[event] = cmd
+        return result
 
     def uninstall(self) -> Dict[str, str]:
         """
@@ -104,17 +156,17 @@ class HooksManager:
             Dict mapping event name to status: "removed" or "not_found"
         """
         if not CLAUDE_SETTINGS.exists():
-            return {event: "not_found" for event in HOOKS_TO_INSTALL}
+            return {event: "not_found" for event in _build_hooks()}
 
         self._backup_settings()
         settings = self._read_settings()
 
         if "hooks" not in settings:
-            return {event: "not_found" for event in HOOKS_TO_INSTALL}
+            return {event: "not_found" for event in _build_hooks()}
 
         results = {}
 
-        for event in HOOKS_TO_INSTALL:
+        for event in _build_hooks():
             existing = settings["hooks"].get(event, [])
             filtered = [
                 group for group in existing
@@ -152,7 +204,7 @@ class HooksManager:
         hooks = settings.get("hooks", {})
 
         result = {}
-        for event in HOOKS_TO_INSTALL:
+        for event in _build_hooks():
             existing = hooks.get(event, [])
             result[event] = self._hook_already_installed(existing)
 

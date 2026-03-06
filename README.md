@@ -575,6 +575,8 @@ To import a bundle:
 
 ### `claude-sync hooks-install`
 
+> ⚠️ **WIP — Not stable on Windows.** This feature is under active development and has known issues. Use manual `sync-push` / `sync-pull` until this is resolved. See [issue #hooks-wip] for details.
+
 Install automatic sync hooks in Claude Code. After running this command, sessions are pushed automatically when you close a conversation and pulled when you open Claude Code.
 
 ```bash
@@ -588,6 +590,11 @@ This writes to `~/.claude/settings.json`:
 A backup is saved to `~/.claude/settings.json.bak` before any changes.
 
 Run `hooks-install` on each machine you want to sync automatically. It is **idempotent** — safe to run multiple times.
+
+**Known issues (WIP):**
+- `$CLAUDE_SESSION_ID` is not expanded by Windows shell — partial workaround applied, not fully validated
+- `hooks-uninstall` may fail silently when hooks use absolute executable paths
+- Not fully validated in the VSCode extension context — designed for terminal CLI
 
 ---
 

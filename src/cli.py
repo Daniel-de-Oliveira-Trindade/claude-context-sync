@@ -17,15 +17,17 @@ Available commands:
 - crypto-setup: Configure encryption passphrase for automatic encrypted sync
 """
 
+import re
 import sys
 import click
+from collections import defaultdict
 from pathlib import Path
 from typing import Optional
 
 from .path_transformer import PathTransformer
 from .exporter import SessionExporter
 from .importer import SessionImporter
-from .git_sync import GitSync
+from .git_sync import GitSync, sanitize_project_name
 from .hooks import HooksManager
 from . import logger
 
@@ -45,8 +47,130 @@ def _resolve_repo(repo_option: Optional[str]) -> str:
     return default
 
 
+# ---------------------------------------------------------------------------
+# Display helpers for grouped bundle list (sync-list / sync-pull)
+# ---------------------------------------------------------------------------
+
+def _format_timestamp(ts: str) -> str:
+    """Convert '20260307-091500' → '2026-03-07 09:15', or return ts unchanged."""
+    if len(ts) == 15 and ts[8] == "-":
+        return f"{ts[:4]}-{ts[4:6]}-{ts[6:8]} {ts[9:11]}:{ts[11:13]}"
+    return ts
+
+
+def _extract_first_prompt(label: str) -> str:
+    """
+    Strip the commit-message prefix from a bundle label.
+
+    Input:  "sync: session 097f3474 | claude-session-sync | Fix the bug"
+    Output: "Fix the bug"
+
+    Or if already stripped (stored directly without "sync:" prefix):
+    Input:  "claude-session-sync | Fix the bug"
+    Output: "Fix the bug"
+    """
+    parts = label.split(" | ")
+    if len(parts) >= 3 and parts[0].startswith("sync:"):
+        return " | ".join(parts[2:])
+    if len(parts) >= 2:
+        return " | ".join(parts[1:])
+    return label
+
+
+def _group_bundles(bundles: list, labels: dict) -> list:
+    """
+    Group bundle dicts by session_id_prefix, sorted newest-first within each group.
+
+    Returns a list of group dicts sorted by (project_folder, session_prefix):
+    [
+        {
+            "session_prefix": "097f3474",
+            "project_folder": "claude-session-sync",
+            "label": "sync: session 097f3474 | ...",
+            "versions": [   # newest first
+                {filename, timestamp, relative, path, ...},
+            ]
+        },
+        ...
+    ]
+    """
+    groups: dict = defaultdict(list)
+    for b in bundles:
+        groups[b["session_id_prefix"]].append(b)
+
+    result = []
+    for prefix, versions in groups.items():
+        versions.sort(key=lambda v: v["timestamp"], reverse=True)
+        latest = versions[0]
+        # Prefer label keyed by relative path, fall back to filename
+        label = labels.get(latest["relative"], "") or labels.get(latest["filename"], "")
+        project_folder = latest["project_folder"]
+
+        result.append({
+            "session_prefix": prefix,
+            "project_folder": project_folder,
+            "label": label,
+            "versions": versions,
+        })
+
+    result.sort(key=lambda g: (g["project_folder"], g["session_prefix"]))
+    return result
+
+
+def _parse_picker_choice(raw: str, groups: list):
+    """
+    Parse interactive picker input.
+
+    Accepts: "2", "2a", "2 a", "2B"
+    Returns: (group_index_0based, version_index_0based) or (None, None) on error.
+    """
+    raw = raw.strip()
+    match = re.fullmatch(r'(\d+)\s*([a-z])?', raw, re.I)
+    if not match:
+        return None, None
+
+    group_num = int(match.group(1))
+    version_letter = match.group(2)
+
+    if group_num < 1 or group_num > len(groups):
+        return None, None
+
+    group = groups[group_num - 1]
+
+    if version_letter is None:
+        version_idx = 0  # default: latest
+    else:
+        version_idx = ord(version_letter.lower()) - ord("a")
+        if version_idx < 0 or version_idx >= len(group["versions"]):
+            return None, None
+
+    return group_num - 1, version_idx
+
+
+def _extract_project_from_bundle(bundle_path: str) -> str:
+    """
+    Read bundle metadata to extract the project name (last component of projectPath).
+
+    Used to organise backups into per-project subfolders.
+    Returns "" on any error.
+    """
+    try:
+        imp = SessionImporter()
+        data = imp.read_bundle(bundle_path)
+        meta = data.get("session", {}).get("metadata", {})
+        pp = meta.get("projectPath", "")
+        if pp:
+            clean = pp.replace("${PROJECTS}/", "").replace("${HOME}/", "")
+            return Path(clean).name
+    except Exception:
+        pass
+    return ""
+
+
+# ---------------------------------------------------------------------------
+
 @click.group()
-@click.version_option(version="0.4.0")
+@click.version_option(version="0.5.0")
 def cli():
     """Claude Context Sync - Transfer Claude Code sessions between devices"""
     pass
@@ -219,6 +343,22 @@ def import_cmd(bundle_path, force, project_path):
             bundle_path = decrypted_path
             click.echo(f"[OK] Bundle decrypted: {Path(bundle_path).name}\n")
 
+        # Save local backup if a default repo is configured
+        try:
+            transformer = PathTransformer()
+            default_repo = transformer.get_default_repo()
+            if default_repo:
+                gs = GitSync(repo_url=default_repo)
+                backup_project = _extract_project_from_bundle(bundle_path)
+                bp = gs.save_local_backup(
+                    bundle_path, Path(bundle_path).name[:8],
+                    project_name=backup_project
+                )
+                if bp:
+                    click.echo(f"[OK] Local backup saved: {Path(bp).name}\n")
+        except Exception:
+            pass  # Backup failure must never block the import
+
         importer = SessionImporter()
         success = importer.import_session(bundle_path, force=force, project_path_override=resolved)
 
@@ -298,14 +438,26 @@ def use(device_id):
 
 
 @cli.command()
-@click.argument('url')
+@click.argument('url', required=False, default=None)
 def repo(url):
-    """Set default Git repository URL for sync commands"""
+    """Set or show default Git repository URL for sync commands.
+
+    Without arguments, shows the currently configured repository.
+    With a URL argument, sets it as the new default.
+    """
     try:
         transformer = PathTransformer()
-        transformer.set_default_repo(url)
-        click.echo(f"[OK] Default repository set to: {url}")
-        click.echo(f"     You can now run sync-push/pull/list without --repo")
+        if url:
+            transformer.set_default_repo(url)
+            click.echo(f"[OK] Default repository set to: {url}")
+            click.echo(f"     You can now run sync-push/pull/list without --repo")
+        else:
+            current = transformer.get_default_repo()
+            if current:
+                click.echo(f"[OK] Default repository: {current}")
+            else:
+                click.echo("[INFO] No default repository configured.")
+                click.echo("       Run: claude-sync repo <url>")
 
     except Exception as e:
         click.echo(f"[ERROR] Error: {e}", err=True)
@@ -336,6 +488,12 @@ def sync_push(session_id, session_opt, repo, output, compress, encrypt, auto, ve
     # --session option takes precedence over positional argument
     if session_opt:
         session_id = session_opt
+
+    # On Windows, $CLAUDE_SESSION_ID is not expanded by the shell — read from env directly
+    import os as _os
+    if session_id and session_id.startswith("$"):
+        env_var = session_id.lstrip("$")
+        session_id = _os.environ.get(env_var) or _os.environ.get(env_var.upper()) or None
 
     def _abort(message: str, error: Exception = None):
         """Handle errors differently in auto vs interactive mode."""
@@ -385,8 +543,9 @@ def sync_push(session_id, session_opt, repo, output, compress, encrypt, auto, ve
             ts = datetime.now().strftime("%Y%m%d-%H%M%S")
             output = f"{session_id}_{ts}.bundle"
 
-        # 1. Gather metadata for descriptive commit label
+        # 1. Gather metadata for descriptive commit label and project folder
         label = ""
+        project_name = ""
         project_dir = exporter.find_project_by_session(session_id)
         if project_dir:
             index = exporter.read_sessions_index(project_dir)
@@ -396,8 +555,6 @@ def sync_push(session_id, session_opt, repo, output, compress, encrypt, auto, ve
                 project_path = meta.get('projectPath') or meta.get('fullPath', '')
                 if project_path:
                     clean = project_path.replace('${PROJECTS}/', '').replace('${HOME}/', '')
-                    # Use the last path component as project name (works for both
-                    # template paths like "${PROJECTS}/myapp" and absolute paths)
                     project_name = Path(clean).name or project_dir.name.split('--')[-1]
                 else:
                     project_name = project_dir.name.split('--')[-1]
@@ -446,9 +603,17 @@ def sync_push(session_id, session_opt, repo, output, compress, encrypt, auto, ve
             click.echo(f"\nPushing to Git repository: {resolved_repo}")
         logger.log_app(f"Pushing to {resolved_repo}...")
         git_sync = GitSync(repo_url=resolved_repo)
-        dest = git_sync.push_bundle(final_output, session_id, label=label)
+        dest = git_sync.push_bundle(final_output, session_id, label=label, project_name=project_name)
 
         logger.log_app(f"Git push OK: {Path(dest).name}")
+
+        # Save local backup (silent — does not affect the main flow on failure)
+        try:
+            backup_path = git_sync.save_local_backup(final_output, session_id[:8], project_name=project_name)
+            if backup_path:
+                logger.log_app(f"Local backup saved: {Path(backup_path).name}")
+        except Exception:
+            pass
 
         if auto:
             logger.log_hook("sync-push", session_id, "OK")
@@ -488,15 +653,12 @@ def sync_push(session_id, session_opt, repo, output, compress, encrypt, auto, ve
 def sync_pull(session_id_prefix, repo, force, project_path, latest, auto, verbose):
     """Pull bundle from Git repository and import session.
 
-    If SESSION_ID_PREFIX is omitted, lists available bundles in the repository
-    and prompts you to choose one.
+    If SESSION_ID_PREFIX is omitted, shows an interactive grouped picker.
+    Choose a session with [N] (latest version) or [Na] / [Nb] (specific version).
 
     Use --latest to pull the most recently pushed bundle (used by SessionStart hooks).
     Use --auto for hook mode (non-interactive, logs errors to hook.log).
     """
-    import re
-    UUID_RE = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', re.I)
-
     if verbose:
         logger.set_verbose(True)
 
@@ -515,19 +677,18 @@ def sync_pull(session_id_prefix, repo, force, project_path, latest, auto, verbos
         logger.log_app(f"Pulling from {resolved_repo}...")
         git_sync = GitSync(repo_url=resolved_repo)
 
-        # --latest: pull the most recently pushed bundle
+        # --latest: pull the most recently pushed bundle (used by SessionStart hook)
         if latest:
             bundle_path = git_sync.get_latest_bundle()
             if bundle_path is None:
                 if auto:
-                    # No bundles yet — not an error, just nothing to pull
                     logger.log_hook("sync-pull", "", "OK")
                     sys.exit(0)
                 else:
                     click.echo("[INFO] No bundles found in repository. Nothing to pull.")
                     return
         elif session_id_prefix is None:
-            # Interactive picker
+            # Interactive grouped picker
             bundles = git_sync.list_bundles()
 
             if not bundles:
@@ -536,27 +697,37 @@ def sync_pull(session_id_prefix, repo, force, project_path, latest, auto, verbos
                 raise click.Abort()
 
             labels = git_sync.get_bundle_labels()
+            groups = _group_bundles(bundles, labels)
 
-            click.echo(f"Available bundles in repository:\n")
-            for i, name in enumerate(bundles):
-                label = labels.get(name, "")
-                match = UUID_RE.search(name)
-                prefix = match.group()[:8] if match else name[:8]
-                if label:
-                    click.echo(f"  [{i + 1}] {prefix}  {label}")
-                else:
-                    click.echo(f"  [{i + 1}] {name}")
+            click.echo(f"Available sessions in repository:\n")
+            for i, group in enumerate(groups, 1):
+                project_display = group["project_folder"] or "(sem-projeto)"
+                first_prompt = _extract_first_prompt(group["label"]) if group["label"] else ""
+                header = f"[{i}] {group['session_prefix']} — {project_display}"
+                if first_prompt:
+                    header += f"  |  {first_prompt}"
+                click.echo(header)
 
-            choice = click.prompt("\nChoose session number", type=int)
-            if choice < 1 or choice > len(bundles):
-                click.echo(f"[ERROR] Invalid choice: {choice}. Must be between 1 and {len(bundles)}.", err=True)
+                for j, v in enumerate(group["versions"]):
+                    sub = chr(ord("a") + j)
+                    ts_display = _format_timestamp(v["timestamp"]) if v["timestamp"] else "(no date)"
+                    latest_tag = "  <- latest" if j == 0 else ""
+                    click.echo(f"    [{sub}] {ts_display}  {v['filename']}{latest_tag}")
+                click.echo()
+
+            raw_choice = click.prompt(
+                "Choose session [number] or [number+letter] for specific version (e.g. 1, 2a, 2b)"
+            )
+            group_idx, version_idx = _parse_picker_choice(raw_choice, groups)
+            if group_idx is None:
+                click.echo(f"[ERROR] Invalid choice: {raw_choice!r}", err=True)
                 raise click.Abort()
 
-            chosen = bundles[choice - 1]
-            match = UUID_RE.search(chosen)
-            session_id_prefix = match.group()[:8] if match else chosen
+            chosen_group = groups[group_idx]
+            chosen_version = chosen_group["versions"][version_idx]
+            session_id_prefix = chosen_group["session_prefix"]
+            bundle_path = chosen_version["path"]
             click.echo()
-            bundle_path = git_sync.pull_bundle(session_id_prefix)
         else:
             bundle_path = git_sync.pull_bundle(session_id_prefix)
 
@@ -567,9 +738,7 @@ def sync_pull(session_id_prefix, repo, force, project_path, latest, auto, verbos
                 sys.exit(1)
             else:
                 click.echo(f"[ERROR] {msg}", err=True)
-                click.echo(f"\nAvailable bundles:")
-                for name in git_sync.list_bundles():
-                    click.echo(f"  - {name}")
+                click.echo(f"\nRun 'claude-sync sync-list' to see available bundles.")
                 raise click.Abort()
 
         logger.log_app(f"Found bundle: {Path(bundle_path).name}")
@@ -595,16 +764,27 @@ def sync_pull(session_id_prefix, repo, force, project_path, latest, auto, verbos
                 encrypted_data = f.read()
             decrypted = decrypt_bundle(encrypted_data, passphrase=passphrase)
 
-            # Write decrypted to temp file (strip .enc extension)
             decrypted_path = bundle_path[:-4]
             with open(decrypted_path, "wb") as f:
                 f.write(decrypted)
             bundle_path = decrypted_path
             logger.log_app(f"Bundle decrypted: {Path(bundle_path).name}")
 
-        # Import session
+        # Save local backup before importing
+        try:
+            backup_project = _extract_project_from_bundle(bundle_path)
+            backup_path = git_sync.save_local_backup(
+                bundle_path, session_id_prefix or Path(bundle_path).name[:8],
+                project_name=backup_project
+            )
+            if backup_path:
+                logger.log_app(f"Local backup saved: {Path(backup_path).name}")
+        except Exception:
+            pass  # Backup failure must never block the import
+
+        # Import session — in auto mode always force-overwrite (hook must stay up to date)
         importer = SessionImporter()
-        success = importer.import_session(bundle_path, force=force, project_path_override=resolved)
+        success = importer.import_session(bundle_path, force=force or auto, project_path_override=resolved)
 
         if success:
             if auto:
@@ -632,8 +812,16 @@ def sync_pull(session_id_prefix, repo, force, project_path, latest, auto, verbos
 
     except Exception as e:
         if auto:
+            # In auto (SessionStart hook) mode, network/git errors are non-critical:
+            # the user may be offline or the repo may be temporarily unavailable.
+            # Always log to hook.log, but exit 0 for transient errors so the IDE
+            # does not show a scary error notification on every startup.
+            import subprocess as _sp
+            is_transient = isinstance(e, _sp.CalledProcessError) or any(
+                kw in str(e).lower() for kw in ("git", "ssh", "network", "connection", "timeout", "remote")
+            )
             logger.log_hook("sync-pull", "", "ERROR", e)
-            sys.exit(1)
+            sys.exit(0 if is_transient else 1)
         else:
             click.echo(f"[ERROR] Error during sync-pull: {e}", err=True)
             raise click.Abort()
@@ -642,10 +830,7 @@ def sync_pull(session_id_prefix, repo, force, project_path, latest, auto, verbos
 @cli.command('sync-list')
 @click.option('--repo', default=None, help='Git repository URL (SSH or HTTPS, or set default with: claude-sync repo <url>)')
 def sync_list(repo):
-    """List bundles available in Git repository"""
-    import re
-    UUID_RE = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', re.I)
-
+    """List bundles available in Git repository, grouped by session."""
     try:
         resolved_repo = _resolve_repo(repo)
         click.echo(f"Fetching bundle list from: {resolved_repo}\n")
@@ -657,20 +842,28 @@ def sync_list(repo):
             return
 
         labels = git_sync.get_bundle_labels()
+        groups = _group_bundles(bundles, labels)
 
-        click.echo(f"Found {len(bundles)} bundle(s):\n")
-        for name in bundles:
-            match = UUID_RE.search(name)
-            click.echo(f"  {name}")
-            label = labels.get(name, "")
-            if label:
-                click.echo(f"    {label}")
-            if match:
-                click.echo(f"    sync-pull ID: {match.group()[:8]}")
+        click.echo(f"Found {len(bundles)} bundle(s) in {len(groups)} session(s):\n")
+
+        for i, group in enumerate(groups, 1):
+            project_display = group["project_folder"] or "(sem-projeto)"
+            first_prompt = _extract_first_prompt(group["label"]) if group["label"] else ""
+            header = f"[{i}] {group['session_prefix']} — {project_display}"
+            if first_prompt:
+                header += f"  |  {first_prompt}"
+            click.echo(header)
+
+            for j, v in enumerate(group["versions"]):
+                sub = chr(ord("a") + j)
+                ts_display = _format_timestamp(v["timestamp"]) if v["timestamp"] else "(no date)"
+                latest_tag = "  <- latest" if j == 0 else ""
+                click.echo(f"    [{sub}] {ts_display}  {v['filename']}{latest_tag}")
             click.echo()
 
-        click.echo(f"To import a bundle:")
-        click.echo(f"  claude-sync sync-pull <sync-pull ID>")
+        click.echo(f"To import a session:")
+        click.echo(f"  claude-sync sync-pull <session-prefix>")
+        click.echo(f"  claude-sync sync-pull  (interactive picker)")
 
     except Exception as e:
         click.echo(f"[ERROR] Error: {e}", err=True)
@@ -678,31 +871,53 @@ def sync_list(repo):
 
 
 @cli.command('hooks-install')
-def hooks_install():
+@click.option('--force', is_flag=True, default=False,
+              help='Overwrite existing hooks with the current version')
+def hooks_install(force):
     """Install automatic sync hooks in Claude Code (SessionEnd + SessionStart).
 
     After running this command, sessions will be pushed automatically when you
     close a Claude conversation and pulled when you open Claude Code.
 
+    If hooks are already installed, shows their current commands without modifying
+    anything. Use --force to update them to the current version.
+
     Run 'hooks-uninstall' to remove the hooks.
     """
     try:
         manager = HooksManager()
-        results = manager.install()
+        results = manager.install(force=force)
 
         installed = [e for e, s in results.items() if s == "installed"]
+        updated = [e for e, s in results.items() if s == "updated"]
         already = [e for e, s in results.items() if s == "already_installed"]
 
+        # Case 1: all already installed, no --force
+        if already and not installed and not updated:
+            cmds = manager.get_installed_commands()
+            click.echo("[--] Hooks already installed:")
+            for event in already:
+                cmd = cmds.get(event, "(command not found)")
+                click.echo(f"     {event:<14}: {cmd}")
+            click.echo()
+            click.echo("To update hooks to the current version, run:")
+            click.echo("  claude-sync hooks-install --force")
+            return
+
+        # Case 2: --force update
+        if updated:
+            click.echo(f"[OK] Hooks updated (force reinstall):")
+            for event in updated:
+                click.echo(f"     {event}: updated")
+        # Case 3: fresh install
         if installed:
             click.echo(f"[OK] Hooks installed: {', '.join(installed)}")
-        if already:
-            click.echo(f"[--] Already installed: {', '.join(already)}")
 
         click.echo(f"\nHooks configured in: ~/.claude/settings.json")
         click.echo(f"Backup saved to:      ~/.claude/settings.json.bak")
         click.echo(f"\nFrom now on:")
-        click.echo(f"  - When you close a Claude session → sync-push runs automatically")
-        click.echo(f"  - When you open Claude Code       → sync-pull runs automatically")
+        click.echo(f"  - When you close a Claude session: sync-push runs automatically")
+        click.echo(f"  - When you open Claude Code:       sync-pull runs automatically")
         click.echo(f"\nTo remove hooks, run: claude-sync hooks-uninstall")
 
     except Exception as e:
