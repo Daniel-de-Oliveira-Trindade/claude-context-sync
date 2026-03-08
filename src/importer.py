@@ -342,9 +342,16 @@ class SessionImporter:
         session_file = project_dir / f"{session_id}.jsonl"
 
         if session_file.exists() and not force:
-            raise FileExistsError(
-                f"Session '{session_id}' already exists. Use --force to overwrite."
-            )
+            # Auto-backup existing session before overwriting instead of aborting
+            import shutil as _shutil
+            from datetime import datetime as _dt
+            backup_dir = project_dir / "backups"
+            backup_dir.mkdir(exist_ok=True)
+            ts = _dt.now().strftime("%Y%m%d-%H%M%S")
+            backup_file = backup_dir / f"{session_id}_{ts}.jsonl"
+            _shutil.copy2(session_file, backup_file)
+            print(f"[OK] Existing session backed up to: {backup_file.name}")
+            # Proceed as if --force was passed
 
         # 7. Write JSONL
         self.write_jsonl(session_file, messages, show_progress=show_progress)
