@@ -13,7 +13,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "claude-sync=src.cli:cli",
+            "claude-sync=claude_context_sync.main:main",
         ],
     },
     author="Claude Session Sync Team",

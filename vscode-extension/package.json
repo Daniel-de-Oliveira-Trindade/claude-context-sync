@@ -1,0 +1,166 @@
+{
+  "name": "claude-context-sync",
+  "displayName": "Claude Context Sync",
+  "description": "Sync Claude Code sessions between machines via Git",
+  "version": "0.1.0",
+  "publisher": "claude-context-sync",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "Claude Context Sync",
+      "properties": {
+        "claudeContextSync.cliPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the claude-sync executable. Leave empty for auto-detection.",
+          "scope": "machine"
+        },
+        "claudeContextSync.defaultRepo": {
+          "type": "string",
+          "default": "",
+          "description": "Git repository URL for sync (SSH or HTTPS). Example: git@github.com:user/sessions.git",
+          "scope": "machine"
+        },
+        "claudeContextSync.deviceName": {
+          "type": "string",
+          "default": "",
+          "description": "This device's identifier in claude-sync (e.g. desktop, laptop).",
+          "scope": "machine"
+        },
+        "claudeContextSync.encryptionEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Encrypt bundles with AES-256-GCM when pushing. Requires passphrase saved via claude-sync crypto-setup.",
+          "scope": "machine"
+        },
+        "claudeContextSync.projectsPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to your projects directory (used for device configuration).",
+          "scope": "machine"
+        },
+        "claudeContextSync.autoRefreshOnFocus": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically refresh the session list when the extension panel gains focus.",
+          "scope": "machine"
+        },
+        "claudeContextSync.setupCompleted": {
+          "type": "boolean",
+          "default": false,
+          "description": "Internal: whether the Setup Wizard has been completed. Set to false to re-run the wizard.",
+          "scope": "machine"
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "claudeSync",
+          "title": "Claude Sync",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "claudeSync": [
+        {
+          "id": "claudeSyncLocal",
+          "name": "Local Sessions",
+          "contextualTitle": "Claude Local Sessions"
+        },
+        {
+          "id": "claudeSyncRemote",
+          "name": "Remote Bundles",
+          "contextualTitle": "Claude Remote Bundles"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "claudeContextSync.push",
+        "title": "Claude Sync: Push Session",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "claudeContextSync.pull",
+        "title": "Claude Sync: Pull Session",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "claudeContextSync.refreshLocal",
+        "title": "Claude Sync: Refresh Local Sessions",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "claudeContextSync.refreshRemote",
+        "title": "Claude Sync: Refresh Remote Bundles",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "claudeContextSync.openSetupWizard",
+        "title": "Claude Sync: Open Setup Wizard"
+      },
+      {
+        "command": "claudeContextSync.setRepo",
+        "title": "Claude Sync: Set Repository URL"
+      },
+      {
+        "command": "claudeContextSync.setDevice",
+        "title": "Claude Sync: Configure Device"
+      },
+      {
+        "command": "claudeContextSync.hooksInstall",
+        "title": "Claude Sync: Install Auto-Sync Hooks"
+      },
+      {
+        "command": "claudeContextSync.hooksUninstall",
+        "title": "Claude Sync: Uninstall Auto-Sync Hooks"
+      },
+      {
+        "command": "claudeContextSync.showOutput",
+        "title": "Claude Sync: Show Output Log"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "claudeContextSync.refreshLocal",
+          "when": "view == claudeSyncLocal",
+          "group": "navigation"
+        },
+        {
+          "command": "claudeContextSync.refreshRemote",
+          "when": "view == claudeSyncRemote",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "claudeContextSync.push",
+          "when": "viewItem == session",
+          "group": "inline"
+        },
+        {
+          "command": "claudeContextSync.pull",
+          "when": "viewItem == remoteSession || viewItem == remoteVersion",
+          "group": "inline"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.22.0",
+    "typescript": "^5.3.0"
+  }
+}
