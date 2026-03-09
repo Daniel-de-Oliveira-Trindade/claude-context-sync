@@ -45,7 +45,9 @@
       "Bash(python -c \"import src.cli; print\\(src.cli.__file__\\)\")",
       "Bash(where.exe claude-sync)",
       "Bash(git -C \"C:/Users/Daniel/.claude-sync-git\" config --list)",
-      "Bash(git config --global --list)"
+      "Bash(git config --global --list)",
+      "Bash(ls node_modules/.bin/tsc*)",
+      "Bash(./node_modules/.bin/tsc -p ./)"
     ]
   }
 }

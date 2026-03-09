@@ -1,5 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-  <polyline points="23 4 23 10 17 10"/>
-  <polyline points="1 20 1 14 7 14"/>
-  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+  <!-- Sync arrows (slightly tighter to leave center space) -->
+  <polyline points="22 4 22 10 16 10"/>
+  <polyline points="2 20 2 14 8 14"/>
+  <path d="M4.51 9a8 8 0 0 1 13.22-2.99L22 10M2 14l4.27 4.01A8 8 0 0 0 19.49 15"/>
+  <!-- Diamond in center (Claude-ish shape) -->
+  <polygon points="12,8 15,12 12,16 9,12" stroke-width="1.8" fill="currentColor" opacity="0.85"/>
 </svg>

@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { SessionEntry, BundleGroup, BundleVersion } from '../types';
+import { LocalBackup } from '../cli/bundleReader';
 import { decodeProjectDir, formatDate } from '../cli/outputParser';
 
 // ─────────────────────────────────────────────
@@ -26,9 +27,12 @@ export class SessionNode extends vscode.TreeItem {
   readonly sessionId: string;
   readonly entry: SessionEntry;
 
-  constructor(entry: SessionEntry) {
+  constructor(entry: SessionEntry, hasBackups: boolean = false) {
     const shortId = entry.sessionId.slice(0, 8);
-    super(shortId, vscode.TreeItemCollapsibleState.None);
+    const collapsible = hasBackups
+      ? vscode.TreeItemCollapsibleState.Collapsed
+      : vscode.TreeItemCollapsibleState.None;
+    super(shortId, collapsible);
     this.sessionId = entry.sessionId;
     this.entry = entry;
     this.description = formatDate(entry.modified);
@@ -98,4 +102,38 @@ export class RemoteVersionNode extends vscode.TreeItem {
   }
 }
 
-export type TreeNode = ProjectNode | SessionNode | RemoteProjectNode | RemoteSessionNode | RemoteVersionNode | vscode.TreeItem;
+// ─────────────────────────────────────────────
+// Backup tree nodes (local backups)
+// ─────────────────────────────────────────────
+
+export class BackupProjectNode extends vscode.TreeItem {
+  readonly backups: LocalBackup[];
+  readonly projectFolder: string;
+
+  constructor(projectFolder: string, backups: LocalBackup[]) {
+    super(projectFolder, vscode.TreeItemCollapsibleState.Collapsed);
+    this.projectFolder = projectFolder;
+    this.backups = backups;
+    this.description = `${backups.length} backup${backups.length !== 1 ? 's' : ''}`;
+    this.iconPath = new vscode.ThemeIcon('folder');
+    this.contextValue = 'backupProject';
+  }
+}
+
+export class BackupNode extends vscode.TreeItem {
+  readonly backup: LocalBackup;
+  readonly isActive: boolean;
+
+  constructor(backup: LocalBackup, isActive: boolean) {
+    const label = backup.timestampDisplay;
+    super(label, vscode.TreeItemCollapsibleState.None);
+    this.backup = backup;
+    this.isActive = isActive;
+    this.description = isActive ? '← em uso' : backup.sessionPrefix;
+    this.tooltip = `${backup.filename}\n${backup.fullPath}`;
+    this.iconPath = new vscode.ThemeIcon(isActive ? 'check' : 'archive');
+    this.contextValue = isActive ? 'backupActive' : 'backup';
+  }
+}
+
+export type TreeNode = ProjectNode | SessionNode | RemoteProjectNode | RemoteSessionNode | RemoteVersionNode | BackupProjectNode | BackupNode | vscode.TreeItem;

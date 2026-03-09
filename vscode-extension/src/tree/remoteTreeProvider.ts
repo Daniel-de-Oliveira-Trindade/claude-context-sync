@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { CliRunner } from '../cli/cliRunner';
-import { parseListOutput } from '../cli/outputParser';
+import { readLocalBundles, groupBundles } from '../cli/bundleReader';
 import { BundleGroup } from '../types';
 import { RemoteProjectNode, RemoteSessionNode, RemoteVersionNode, TreeNode } from './treeNodes';
 
@@ -18,6 +18,20 @@ export class RemoteTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     return this.groups;
   }
 
+  /** Load bundles from local filesystem only (no git pull). Called on activation. */
+  loadLocal(): void {
+    try {
+      const bundles = readLocalBundles();
+      this.groups = groupBundles(bundles);
+    } catch {
+      this.groups = [];
+    }
+    this.loading = false;
+    this.loaded = true;
+    this._onDidChangeTreeData.fire();
+  }
+
+  /** Pull from remote then reload. Called when user clicks refresh. */
   refresh(): void {
     this.loading = true;
     this.loaded = false;
@@ -26,37 +40,27 @@ export class RemoteTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   }
 
   private async loadRemote(): Promise<void> {
-    // sync-list output goes to stdout (exit 0); progress lines go to stderr
-    const result = await this.runner.run(['sync-list'], { timeoutMs: 60_000 });
-    this.loading = false;
-    this.loaded = true;
+    const syncDir = require('path').join(require('os').homedir(), '.claude-sync-git');
+    const fs = require('fs') as typeof import('fs');
 
-    // Use stdout if available, fall back to combined output for parsing
-    const textToParse = result.stdout || (result.stdout + result.stderr);
+    if (fs.existsSync(require('path').join(syncDir, '.git'))) {
+      // Pull latest from remote — ignore errors (offline, auth issues)
+      await this.runner.run(['sync-list'], { timeoutMs: 30_000 }).catch(() => undefined);
+    }
 
-    if (result.exitCode === 0 && result.stdout.includes('Session ID:')) {
-      const sessions = parseListOutput(textToParse);
-      this.groups = sessions.map((s, i) => ({
-        index: i + 1,
-        sessionPrefix: s.sessionId.slice(0, 8),
-        projectFolder: s.projectDir,
-        firstPrompt: s.firstPrompt,
-        versions: [{
-          letter: 'a',
-          timestamp: s.modified?.slice(0, 16).replace('T', ' ') ?? '',
-          filename: `${s.sessionId}.bundle`,
-          isLatest: true
-        }]
-      }));
-    } else if (result.exitCode !== 0) {
+    // Read bundles directly from local filesystem (no exe needed)
+    try {
+      const bundles = readLocalBundles();
+      this.groups = groupBundles(bundles);
+    } catch (err) {
       this.groups = [];
       vscode.window.showErrorMessage(
-        `Claude Sync: Failed to fetch remote bundles (exit ${result.exitCode}). See "Claude Sync" output channel.`
+        `Claude Sync: Could not read local bundle directory. ${err instanceof Error ? err.message : err}`
       );
-    } else {
-      // exit 0 but no sessions found
-      this.groups = [];
     }
+
+    this.loading = false;
+    this.loaded = true;
     this._onDidChangeTreeData.fire();
   }
 
@@ -91,7 +95,7 @@ export class RemoteTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   private buildProjectNodes(): RemoteProjectNode[] {
     const map = new Map<string, BundleGroup[]>();
     for (const g of this.groups) {
-      const key = g.projectFolder || 'unknown';
+      const key = g.projectFolder || '(root)';
       if (!map.has(key)) { map.set(key, []); }
       map.get(key)!.push(g);
     }
@@ -106,14 +110,14 @@ export class RemoteTreeProvider implements vscode.TreeDataProvider<TreeNode> {
 
 class LoadingNode extends vscode.TreeItem {
   constructor() {
-    super('Fetching from remote...', vscode.TreeItemCollapsibleState.None);
+    super('Fetching bundles...', vscode.TreeItemCollapsibleState.None);
     this.iconPath = new vscode.ThemeIcon('loading~spin');
   }
 }
 
 class NotLoadedNode extends vscode.TreeItem {
   constructor() {
-    super('Click refresh to load remote bundles', vscode.TreeItemCollapsibleState.None);
+    super('Click ↺ to load remote bundles', vscode.TreeItemCollapsibleState.None);
     this.iconPath = new vscode.ThemeIcon('info');
     this.command = {
       command: 'claudeContextSync.refreshRemote',

@@ -4,6 +4,12 @@
   "description": "Sync Claude Code sessions between machines via Git",
   "version": "0.1.0",
   "publisher": "claude-context-sync",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Daniel-de-Oliveira-Trindade/claude-context-sync"
+  },
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Other"],
   "activationEvents": ["onStartupFinished"],
@@ -45,7 +51,13 @@
         "claudeContextSync.autoRefreshOnFocus": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically refresh the session list when the extension panel gains focus.",
+          "description": "Automatically refresh local sessions when the extension panel gains focus.",
+          "scope": "machine"
+        },
+        "claudeContextSync.autoFetchRemoteOnFocus": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically pull remote bundles from git when the extension panel gains focus. Disable if you have a slow connection or want to fetch manually with the ↺ button.",
           "scope": "machine"
         },
         "claudeContextSync.setupCompleted": {
@@ -123,6 +135,11 @@
       {
         "command": "claudeContextSync.showOutput",
         "title": "Claude Sync: Show Output Log"
+      },
+      {
+        "command": "claudeContextSync.restoreBackup",
+        "title": "Claude Sync: Restore Backup",
+        "icon": "$(history)"
       }
     ],
     "menus": {
@@ -147,6 +164,11 @@
         {
           "command": "claudeContextSync.pull",
           "when": "viewItem == remoteSession || viewItem == remoteVersion",
+          "group": "inline"
+        },
+        {
+          "command": "claudeContextSync.restoreBackup",
+          "when": "viewItem == backup || viewItem == backupActive",
           "group": "inline"
         }
       ]

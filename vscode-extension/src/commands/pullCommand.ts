@@ -91,13 +91,21 @@ export function registerPullCommand(
           });
         });
 
-        if (result.exitCode === 0) {
+        const success = result.exitCode === 0 ||
+          result.stdout.includes('[SUCCESS]') ||
+          result.stdout.includes('imported successfully') ||
+          result.stdout.includes('Session imported');
+
+        if (success) {
           statusBar.setState('success', 'Session pulled successfully');
           vscode.window.showInformationMessage(
             'Claude Sync: Session pulled. You can now resume it in Claude Code.'
           );
         } else {
-          const errMsg = lastLine || result.stderr.split('\n').filter(Boolean).pop() || 'Unknown error';
+          const errMsg = result.stdout.split('\n').filter(l => l.includes('[ERROR]')).pop()
+            || result.stderr.split('\n').filter(Boolean).pop()
+            || lastLine
+            || 'Unknown error';
           statusBar.setState('error', errMsg);
           const action = await vscode.window.showErrorMessage(
             `Claude Sync: Pull failed — ${errMsg}`,

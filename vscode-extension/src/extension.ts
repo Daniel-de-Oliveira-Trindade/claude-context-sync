@@ -8,6 +8,7 @@ import { registerPushCommand } from './commands/pushCommand';
 import { registerPullCommand } from './commands/pullCommand';
 import { registerConfigCommands } from './commands/configCommands';
 import { registerHooksCommands } from './commands/hooksCommands';
+import { registerRestoreBackupCommand } from './commands/restoreBackupCommand';
 import { getCliPath, isSetupCompleted } from './config/settings';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -55,6 +56,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerPullCommand(context, runner, remoteTree, statusBar, outputChannel);
   registerConfigCommands(context, runner);
   registerHooksCommands(context, runner);
+  registerRestoreBackupCommand(context, runner, localTree, statusBar, outputChannel);
 
   context.subscriptions.push(
     vscode.commands.registerCommand('claudeContextSync.refreshLocal', () => localTree.refresh()),
@@ -74,6 +76,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // Auto-refresh local sessions on activation
   localTree.refresh();
+  // Always show remote bundles from local filesystem immediately (no git pull)
+  remoteTree.loadLocal();
 
   // Auto-refresh on window focus if enabled
   context.subscriptions.push(
@@ -82,6 +86,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const cfg = vscode.workspace.getConfiguration('claudeContextSync');
         if (cfg.get<boolean>('autoRefreshOnFocus', true)) {
           localTree.refresh();
+        }
+        if (cfg.get<boolean>('autoFetchRemoteOnFocus', false)) {
+          remoteTree.refresh();
+        } else {
+          remoteTree.loadLocal();
         }
       }
     })

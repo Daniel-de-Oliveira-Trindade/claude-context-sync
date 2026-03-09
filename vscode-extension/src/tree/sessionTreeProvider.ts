@@ -1,14 +1,17 @@
 import * as vscode from 'vscode';
 import { CliRunner } from '../cli/cliRunner';
 import { parseListOutput } from '../cli/outputParser';
+import { readLocalBackups, LocalBackup } from '../cli/bundleReader';
 import { SessionEntry } from '../types';
-import { ProjectNode, SessionNode, TreeNode } from './treeNodes';
+import { ProjectNode, SessionNode, BackupProjectNode, BackupNode, TreeNode } from './treeNodes';
 
 export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   private _onDidChangeTreeData = new vscode.EventEmitter<TreeNode | undefined | void>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
   private sessions: SessionEntry[] = [];
+  // Map: sessionPrefix -> backups sorted newest-first
+  private backupsByPrefix = new Map<string, LocalBackup[]>();
   private loading = false;
 
   constructor(private runner: CliRunner) {}
@@ -27,6 +30,21 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     } else {
       this.sessions = [];
     }
+
+    // Load local backups from filesystem (no CLI needed)
+    this.backupsByPrefix.clear();
+    const backups = readLocalBackups();
+    for (const b of backups) {
+      if (!this.backupsByPrefix.has(b.sessionPrefix)) {
+        this.backupsByPrefix.set(b.sessionPrefix, []);
+      }
+      this.backupsByPrefix.get(b.sessionPrefix)!.push(b);
+    }
+    // Sort each group newest-first
+    for (const list of this.backupsByPrefix.values()) {
+      list.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    }
+
     this._onDidChangeTreeData.fire();
   }
 
@@ -44,7 +62,34 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     }
 
     if (element instanceof ProjectNode) {
-      return element.sessions.map(s => new SessionNode(s));
+      return element.sessions.map(s => {
+        const prefix = s.sessionId.slice(0, 8);
+        const hasBackups = (this.backupsByPrefix.get(prefix) ?? []).length > 0;
+        return new SessionNode(s, hasBackups);
+      });
+    }
+
+    // Session node → show backup project folder as child if backups exist
+    if (element instanceof SessionNode) {
+      const prefix = element.sessionId.slice(0, 8);
+      const backups = this.backupsByPrefix.get(prefix) ?? [];
+      if (backups.length === 0) { return []; }
+      // Group by project folder
+      const byProject = new Map<string, LocalBackup[]>();
+      for (const b of backups) {
+        const key = b.projectFolder || '(root)';
+        if (!byProject.has(key)) { byProject.set(key, []); }
+        byProject.get(key)!.push(b);
+      }
+      return [...byProject.entries()].map(
+        ([proj, list]) => new BackupProjectNode(proj, list)
+      );
+    }
+
+    if (element instanceof BackupProjectNode) {
+      const backups = element.backups;
+      // The most recent backup = "em uso" (active), rest are older
+      return backups.map((b, i) => new BackupNode(b, i === 0));
     }
 
     return [];
