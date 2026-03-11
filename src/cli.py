@@ -538,10 +538,17 @@ def sync_push(session_id, session_opt, repo, output, compress, encrypt, auto, ve
             click.echo()
 
         # Default output name includes session-id + timestamp to avoid collisions
+        # Bundle is written to a temp directory to avoid polluting the project folder
+        import tempfile
+        _tmp_dir = tempfile.mkdtemp(prefix="claude-sync-")
         if output is None:
             from datetime import datetime
             ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-            output = f"{session_id}_{ts}.bundle"
+            output = str(Path(_tmp_dir) / f"{session_id}_{ts}.bundle")
+        else:
+            # User specified a custom output — respect it but still use tmp as base if relative
+            if not Path(output).is_absolute():
+                output = str(Path(_tmp_dir) / output)
 
         # 1. Gather metadata for descriptive commit label and project folder
         label = ""
@@ -612,6 +619,14 @@ def sync_push(session_id, session_opt, repo, output, compress, encrypt, auto, ve
             backup_path = git_sync.save_local_backup(final_output, session_id[:8], project_name=project_name)
             if backup_path:
                 logger.log_app(f"Local backup saved: {Path(backup_path).name}")
+        except Exception:
+            pass
+
+        # Clean up temp bundle files
+        try:
+            import shutil
+            if '_tmp_dir' in locals():
+                shutil.rmtree(_tmp_dir, ignore_errors=True)
         except Exception:
             pass
 
