@@ -1,12 +1,89 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { CliRunner } from '../cli/cliRunner';
 import { StatusBarManager } from '../ui/statusBar';
 import { RemoteTreeProvider } from '../tree/remoteTreeProvider';
 import { RemoteSessionNode, RemoteVersionNode } from '../tree/treeNodes';
 import { withCliProgress } from '../ui/progressReporter';
+import { BundleGroup } from '../types';
 
 function getWorkspacePath(): string | undefined {
   return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+}
+
+/**
+ * Return the last folder name of a path.
+ * "/Users/alice/projetos/my-app" → "my-app"
+ * "C:\\Users\\fsf\\Documents\\projetos\\cadeeu" → "cadeeu"
+ */
+function lastSegment(p: string): string {
+  return path.basename(p);
+}
+
+/**
+ * Check whether the bundle's projectFolder (e.g. "cadeeu") looks like it
+ * belongs to the currently open workspace folder (e.g. "C:\\…\\projetos\\cadeeu").
+ *
+ * We compare the last path segment of the workspace path against the bundle's
+ * project folder name (which is already just the folder name in the git repo).
+ */
+function bundleMatchesWorkspace(bundleProjectFolder: string, workspacePath: string): boolean {
+  if (!bundleProjectFolder || !workspacePath) { return true; } // can't tell → assume OK
+  const wsFolder = lastSegment(workspacePath).toLowerCase();
+  const bundleFolder = bundleProjectFolder.toLowerCase();
+  // The bundle folder might be "plataforma-cadeeu" (nested) or just "cadeeu"
+  return wsFolder === bundleFolder || bundleFolder.endsWith('-' + wsFolder) || bundleFolder.endsWith('/' + wsFolder);
+}
+
+/**
+ * Ask the user to choose a project path when the bundle doesn't match the
+ * current workspace. Returns the path to use, or undefined to cancel.
+ */
+async function askProjectPath(
+  bundleProjectFolder: string,
+  currentWorkspace: string | undefined
+): Promise<string | undefined> {
+  const items: vscode.QuickPickItem[] = [];
+
+  if (currentWorkspace) {
+    items.push({
+      label: `$(folder-active) Use current folder`,
+      description: currentWorkspace,
+      detail: `Import into the currently open workspace (may not match the original project)`
+    });
+  }
+
+  items.push({
+    label: `$(folder-opened) Choose a folder…`,
+    description: '',
+    detail: `Browse to the correct project folder for "${bundleProjectFolder}"`
+  });
+
+  items.push({
+    label: `$(warning) Import anyway (current folder)`,
+    description: currentWorkspace ?? '(no workspace open)',
+    detail: `Force import into the current workspace without validation`
+  });
+
+  const picked = await vscode.window.showQuickPick(items, {
+    title: `Claude Sync: Project mismatch`,
+    placeHolder: `Bundle is from "${bundleProjectFolder}" but current folder is different. Where to import?`
+  });
+
+  if (!picked) { return undefined; }
+
+  if (picked.label.includes('Choose a folder')) {
+    const uris = await vscode.window.showOpenDialog({
+      canSelectFiles: false,
+      canSelectFolders: true,
+      canSelectMany: false,
+      title: `Select project folder for "${bundleProjectFolder}"`
+    });
+    return uris?.[0]?.fsPath;
+  }
+
+  // "Use current folder" or "Import anyway"
+  return currentWorkspace;
 }
 
 export function registerPullCommand(
@@ -19,24 +96,30 @@ export function registerPullCommand(
   context.subscriptions.push(
     vscode.commands.registerCommand('claudeContextSync.pull', async (node?: RemoteSessionNode | RemoteVersionNode) => {
       let sessionPrefix: string | undefined;
+      let bundleProjectFolder: string | undefined;
 
       if (node instanceof RemoteVersionNode) {
         sessionPrefix = node.sessionPrefix;
+        // find the group to get projectFolder
+        const group = remoteTree.getGroups().find(g => g.sessionPrefix === sessionPrefix);
+        bundleProjectFolder = group?.projectFolder;
       } else if (node instanceof RemoteSessionNode) {
         sessionPrefix = node.group.sessionPrefix;
+        bundleProjectFolder = node.group.projectFolder;
       } else {
         // Command Palette: show QuickPick from remote tree data
         const groups = remoteTree.getGroups();
         if (groups.length > 0) {
           // Flatten all versions into a single list for easy picking
-          const items: (vscode.QuickPickItem & { prefix: string })[] = [];
+          const items: (vscode.QuickPickItem & { prefix: string; projectFolder: string })[] = [];
           for (const g of groups) {
             for (const v of g.versions) {
               items.push({
                 label: `$(history) ${g.sessionPrefix}  [${v.letter}]  ${v.timestamp}${v.isLatest ? '  ← latest' : ''}`,
                 description: g.projectFolder,
                 detail: g.firstPrompt?.slice(0, 80),
-                prefix: g.sessionPrefix
+                prefix: g.sessionPrefix,
+                projectFolder: g.projectFolder
               });
             }
           }
@@ -45,6 +128,7 @@ export function registerPullCommand(
             placeHolder: 'Select a session to pull (load remote first if empty)'
           });
           sessionPrefix = picked?.prefix;
+          bundleProjectFolder = picked?.projectFolder;
         } else {
           // No remote data loaded yet — ask to refresh or type manually
           const action = await vscode.window.showWarningMessage(
@@ -66,10 +150,35 @@ export function registerPullCommand(
 
       if (!sessionPrefix) { return; }
 
-      const args = ['sync-pull', sessionPrefix, '--force'];
+      // Determine target project path, with mismatch detection
       const workspacePath = getWorkspacePath();
-      if (workspacePath) {
-        args.push('--project-path', workspacePath);
+      let targetProjectPath = workspacePath;
+
+      if (bundleProjectFolder && workspacePath) {
+        const matches = bundleMatchesWorkspace(bundleProjectFolder, workspacePath);
+        if (!matches) {
+          const chosen = await askProjectPath(bundleProjectFolder, workspacePath);
+          if (chosen === undefined) { return; } // user cancelled
+          targetProjectPath = chosen;
+        }
+      } else if (!workspacePath) {
+        // No workspace open at all — ask the user to pick a folder
+        const uris = await vscode.window.showOpenDialog({
+          canSelectFiles: false,
+          canSelectFolders: true,
+          canSelectMany: false,
+          title: 'Claude Sync: Select the project folder to import the session into'
+        });
+        if (!uris?.[0]) {
+          vscode.window.showWarningMessage('Claude Sync: No folder selected. Pull cancelled.');
+          return;
+        }
+        targetProjectPath = uris[0].fsPath;
+      }
+
+      const args = ['sync-pull', sessionPrefix, '--force'];
+      if (targetProjectPath) {
+        args.push('--project-path', targetProjectPath);
       }
 
       statusBar.setState('syncing', 'Pulling...');
@@ -98,8 +207,11 @@ export function registerPullCommand(
 
         if (success) {
           statusBar.setState('success', 'Session pulled successfully');
+          const whereMsg = targetProjectPath
+            ? ` into "${lastSegment(targetProjectPath)}"`
+            : '';
           vscode.window.showInformationMessage(
-            'Claude Sync: Session pulled. You can now resume it in Claude Code.'
+            `Claude Sync: Session pulled${whereMsg}. Open that project folder in Claude Code to resume it.`
           );
         } else {
           const errMsg = result.stdout.split('\n').filter(l => l.includes('[ERROR]')).pop()

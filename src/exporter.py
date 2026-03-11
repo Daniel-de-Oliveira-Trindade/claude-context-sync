@@ -305,9 +305,118 @@ class SessionExporter:
 
         return True
 
+    def _decode_project_name(self, encoded_dir_name: str) -> str:
+        """
+        Extract a human-readable project name from a Claude-encoded directory name.
+
+        Claude Code encodes the full absolute path, replacing each path separator
+        and the drive colon with '-'. Example:
+          C:/Users/fsf/Documents/projetos/claude-session-sync
+          → c--Users-fsf-Documents-projetos-claude-session-sync
+
+        We strip well-known OS breadcrumbs (users/{name}/documents/projetos/…)
+        and return the remainder, which corresponds to the project path relative
+        to the user's projects root.
+
+        Returns the project path as a string (hyphens where path separators were).
+        Falls back to the raw encoded name if no pattern matches.
+        """
+        import re as _re
+        lower = encoded_dir_name.lower()
+
+        patterns = [
+            # Windows: drive--users/{name}/documents/projetos|projects|…/{project}
+            r'^[a-z]--users-[^-]+-documents-(?:projetos|projects|dev|workspace|repos|code|src)-(.+)$',
+            # Windows: drive--users/{name}/documents/{project}
+            r'^[a-z]--users-[^-]+-documents-(.+)$',
+            # Windows: drive--users/{name}/{project}
+            r'^[a-z]--users-[^-]+-(.+)$',
+            # Linux/Mac: home/{name}/projetos|projects|…/{project}
+            r'^home-[^-]+-(?:projetos|projects|dev|workspace|repos|code|src)-(.+)$',
+            # Linux/Mac: home/{name}/{project}
+            r'^home-[^-]+-(.+)$',
+            # Strip drive prefix only
+            r'^[a-z]--(.+)$',
+        ]
+
+        for pat in patterns:
+            m = _re.match(pat, lower)
+            if m:
+                start = len(encoded_dir_name) - len(m.group(1))
+                return encoded_dir_name[start:]
+
+        return encoded_dir_name
+
+    def _scan_jsonl_sessions(self, project_dir: Path) -> List[Dict]:
+        """
+        Scan a project directory for .jsonl files and build minimal session entries
+        for any session not already present in the sessions-index.json.
+
+        Returns a list of dicts with at minimum {sessionId, _projectDir}.
+        """
+        index = self.read_sessions_index(project_dir)
+        indexed_ids = {e.get("sessionId") for e in index.get("entries", [])}
+
+        extra = []
+        for f in project_dir.iterdir():
+            if not f.is_file() or f.suffix != ".jsonl":
+                continue
+            session_id = f.stem
+            if session_id in indexed_ids:
+                continue  # already covered by the index
+
+            # Build a minimal entry by peeking at the first human turn
+            entry: Dict = {
+                "sessionId": session_id,
+                "_projectDir": project_dir.name,
+                "_fromScan": True,
+            }
+            try:
+                stat = f.stat()
+                entry["modified"] = datetime.fromtimestamp(stat.st_mtime).isoformat()
+                entry["created"] = datetime.fromtimestamp(stat.st_ctime).isoformat()
+            except Exception:
+                pass
+
+            # Try to read first prompt and message count from the file
+            try:
+                lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+                count = 0
+                first_prompt = ""
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        msg = json.loads(line)
+                        if msg.get("type") == "user" and not first_prompt:
+                            content = msg.get("message", {}).get("content", "")
+                            if isinstance(content, str):
+                                first_prompt = content[:200]
+                            elif isinstance(content, list):
+                                for block in content:
+                                    if isinstance(block, dict) and block.get("type") == "text":
+                                        first_prompt = block.get("text", "")[:200]
+                                        break
+                        count += 1
+                    except Exception:
+                        pass
+                entry["messageCount"] = count
+                if first_prompt:
+                    entry["firstPrompt"] = first_prompt
+            except Exception:
+                pass
+
+            extra.append(entry)
+
+        return extra
+
     def list_sessions(self, project_path: Optional[str] = None) -> List[Dict]:
         """
         List all available sessions.
+
+        Combines entries from sessions-index.json with a direct scan of .jsonl
+        files so sessions that were never indexed are also discoverable.
 
         Args:
             project_path: Filter by project path (optional, lists all if None)
@@ -327,7 +436,10 @@ class SessionExporter:
 
             if project_dir.exists():
                 index = self.read_sessions_index(project_dir)
-                return index.get("entries", [])
+                entries = list(index.get("entries", []))
+                entries.extend(self._scan_jsonl_sessions(project_dir))
+                return entries
+            return sessions
 
         for project_dir in projects_dir.iterdir():
             if not project_dir.is_dir():
@@ -336,6 +448,10 @@ class SessionExporter:
             index = self.read_sessions_index(project_dir)
             for entry in index.get("entries", []):
                 entry['_projectDir'] = str(project_dir.name)
+                sessions.append(entry)
+
+            # Also pick up sessions not in the index
+            for entry in self._scan_jsonl_sessions(project_dir):
                 sessions.append(entry)
 
         return sessions

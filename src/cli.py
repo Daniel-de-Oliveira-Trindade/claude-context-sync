@@ -170,7 +170,7 @@ def _extract_project_from_bundle(bundle_path: str) -> str:
 # ---------------------------------------------------------------------------
 
 @click.group()
-@click.version_option(version="0.5.0")
+@click.version_option(version="0.5.1")
 def cli():
     """Claude Context Sync - Transfer Claude Code sessions between devices"""
     pass
@@ -464,6 +464,81 @@ def repo(url):
         raise click.Abort()
 
 
+def _push_single(session_id: str, resolved_repo: str, compress: bool, encrypt: bool,
+                 auto: bool = False, verbose: bool = False) -> str:
+    """
+    Push a single session to the git repo. Returns the destination bundle path.
+    Raises on failure. Extracted so --all can reuse it.
+    """
+    import tempfile, shutil
+    from datetime import datetime
+
+    exporter = SessionExporter()
+
+    _tmp_dir = tempfile.mkdtemp(prefix="claude-sync-")
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    output = str(Path(_tmp_dir) / f"{session_id}_{ts}.bundle")
+
+    label = ""
+    project_name = ""
+    project_dir = exporter.find_project_by_session(session_id)
+    if project_dir:
+        index = exporter.read_sessions_index(project_dir)
+        meta = exporter.find_session_metadata(index, session_id)
+        project_path_meta = (meta or {}).get('projectPath') or (meta or {}).get('fullPath', '')
+        if project_path_meta:
+            clean = project_path_meta.replace('${PROJECTS}/', '').replace('${HOME}/', '')
+            project_name = Path(clean).name or exporter._decode_project_name(project_dir.name)
+        else:
+            project_name = exporter._decode_project_name(project_dir.name)
+        first_prompt = (meta or {}).get('firstPrompt', '')[:50]
+        if not first_prompt:
+            for s in exporter._scan_jsonl_sessions(project_dir):
+                if s.get('sessionId') == session_id:
+                    first_prompt = s.get('firstPrompt', '')[:50]
+                    break
+        label = f"{project_name} | {first_prompt}"
+
+    if not auto:
+        click.echo(f"  Exporting {session_id[:8]}  {project_name}...")
+    exporter.export_session(session_id, output, compress=compress)
+
+    final_output = output
+    if compress and not output.endswith('.gz'):
+        final_output = output + '.gz'
+
+    if encrypt:
+        from .crypto import encrypt_bundle, load_passphrase, PassphraseNotFound
+        try:
+            passphrase = load_passphrase()
+            encrypted_output = final_output + ".enc"
+            with open(final_output, "rb") as f:
+                data = f.read()
+            encrypted = encrypt_bundle(data, passphrase=passphrase)
+            with open(encrypted_output, "wb") as f:
+                f.write(encrypted)
+            import os
+            os.remove(final_output)
+            final_output = encrypted_output
+        except PassphraseNotFound:
+            pass  # skip encryption silently if no passphrase saved
+
+    git_sync = GitSync(repo_url=resolved_repo)
+    dest = git_sync.push_bundle(final_output, session_id, label=label, project_name=project_name)
+
+    try:
+        git_sync.save_local_backup(final_output, session_id[:8], project_name=project_name)
+    except Exception:
+        pass
+
+    try:
+        shutil.rmtree(_tmp_dir, ignore_errors=True)
+    except Exception:
+        pass
+
+    return dest
+
+
 @cli.command('sync-push')
 @click.argument('session_id', required=False, default=None)
 @click.option('--session', 'session_opt', default=None, help='Session UUID (alternative to positional argument)')
@@ -473,12 +548,14 @@ def repo(url):
 @click.option('--encrypt', is_flag=True, default=False, help='Encrypt bundle with AES-256-GCM (requires crypto-setup or prompts for passphrase)')
 @click.option('--auto', is_flag=True, default=False, help='Non-interactive mode for hooks: no prompts, errors go to log file')
 @click.option('--verbose', is_flag=True, default=False, help='Write detailed output to ~/.claude-context-sync/logs/app.log')
-def sync_push(session_id, session_opt, repo, output, compress, encrypt, auto, verbose):
+@click.option('--all', 'push_all', is_flag=True, default=False, help='Push all sessions from the current project directory')
+def sync_push(session_id, session_opt, repo, output, compress, encrypt, auto, verbose, push_all):
     """Export session and push to Git repository.
 
     If SESSION_ID is omitted, lists sessions in the current project directory
     and prompts you to choose one.
 
+    Use --all to push every session found in the current project at once.
     Use --auto for hook mode (non-interactive, logs errors to hook.log).
     Use --session UUID to specify a session directly (used by SessionEnd hooks).
     """
@@ -503,6 +580,35 @@ def sync_push(session_id, session_opt, repo, output, compress, encrypt, auto, ve
         else:
             click.echo(f"[ERROR] {message}", err=True)
             raise click.Abort()
+
+    # --all: push every session in the current project directory
+    if push_all:
+        try:
+            resolved_repo = _resolve_repo(repo)
+            exporter = SessionExporter()
+            sessions = exporter.list_sessions(project_path=str(Path.cwd()))
+            if not sessions:
+                click.echo("[ERROR] No sessions found for the current directory.", err=True)
+                raise click.Abort()
+            click.echo(f"Pushing all {len(sessions)} session(s) from {Path.cwd().name}:\n")
+            ok = 0
+            fail = 0
+            for s in sessions:
+                sid = s['sessionId']
+                try:
+                    # Invoke sync_push logic recursively via the standalone helper
+                    _push_single(sid, resolved_repo, compress, encrypt, auto=False, verbose=verbose)
+                    ok += 1
+                except Exception as e:
+                    click.echo(f"  [ERROR] {sid[:8]}: {e}", err=True)
+                    fail += 1
+            click.echo(f"\n[OK] Pushed {ok} session(s)" + (f", {fail} failed" if fail else "") + ".")
+        except click.Abort:
+            raise
+        except Exception as e:
+            click.echo(f"[ERROR] {e}", err=True)
+            raise click.Abort()
+        return
 
     try:
         resolved_repo = _resolve_repo(repo)
@@ -557,15 +663,22 @@ def sync_push(session_id, session_opt, repo, output, compress, encrypt, auto, ve
         if project_dir:
             index = exporter.read_sessions_index(project_dir)
             meta = exporter.find_session_metadata(index, session_id)
-            if meta:
-                first_prompt = meta.get('firstPrompt', '')[:50]
-                project_path = meta.get('projectPath') or meta.get('fullPath', '')
-                if project_path:
-                    clean = project_path.replace('${PROJECTS}/', '').replace('${HOME}/', '')
-                    project_name = Path(clean).name or project_dir.name.split('--')[-1]
-                else:
-                    project_name = project_dir.name.split('--')[-1]
-                label = f"{project_name} | {first_prompt}"
+            # Derive project name from metadata or from the encoded directory name
+            project_path_meta = (meta or {}).get('projectPath') or (meta or {}).get('fullPath', '')
+            if project_path_meta:
+                clean = project_path_meta.replace('${PROJECTS}/', '').replace('${HOME}/', '')
+                project_name = Path(clean).name or exporter._decode_project_name(project_dir.name)
+            else:
+                project_name = exporter._decode_project_name(project_dir.name)
+            first_prompt = (meta or {}).get('firstPrompt', '')[:50]
+            if not first_prompt:
+                # Try scanning file for first prompt if not in index
+                scanned = exporter._scan_jsonl_sessions(project_dir)
+                for s in scanned:
+                    if s.get('sessionId') == session_id:
+                        first_prompt = s.get('firstPrompt', '')[:50]
+                        break
+            label = f"{project_name} | {first_prompt}"
 
         # 2. Export session locally
         if not auto:
@@ -665,17 +778,62 @@ def sync_push(session_id, session_opt, repo, output, compress, encrypt, auto, ve
 @click.option('--latest', is_flag=True, default=False, help='Pull the most recently pushed bundle (used by SessionStart hooks)')
 @click.option('--auto', is_flag=True, default=False, help='Non-interactive mode for hooks: no prompts, errors go to log file')
 @click.option('--verbose', is_flag=True, default=False, help='Write detailed output to ~/.claude-context-sync/logs/app.log')
-def sync_pull(session_id_prefix, repo, force, project_path, latest, auto, verbose):
+@click.option('--all', 'pull_all', is_flag=True, default=False, help='Pull all available bundles from the repository (latest version of each session)')
+def sync_pull(session_id_prefix, repo, force, project_path, latest, auto, verbose, pull_all):
     """Pull bundle from Git repository and import session.
 
     If SESSION_ID_PREFIX is omitted, shows an interactive grouped picker.
     Choose a session with [N] (latest version) or [Na] / [Nb] (specific version).
 
+    Use --all to pull every session available in the repository at once.
     Use --latest to pull the most recently pushed bundle (used by SessionStart hooks).
     Use --auto for hook mode (non-interactive, logs errors to hook.log).
     """
     if verbose:
         logger.set_verbose(True)
+
+    # --all: pull the latest version of every session in the repository
+    if pull_all:
+        try:
+            resolved_repo = _resolve_repo(repo)
+            resolved = project_path or str(Path.cwd())
+            git_sync = GitSync(repo_url=resolved_repo)
+            bundles = git_sync.list_bundles()
+            if not bundles:
+                click.echo("[ERROR] No bundles found in repository.", err=True)
+                raise click.Abort()
+
+            # Group by session prefix and pick the latest (highest timestamp) of each
+            from collections import defaultdict as _dd
+            groups: dict = _dd(list)
+            for b in bundles:
+                groups[b["session_id_prefix"]].append(b)
+
+            click.echo(f"Pulling all {len(groups)} session(s) from repository:\n")
+            ok = 0
+            fail = 0
+            importer = SessionImporter()
+            for prefix, versions in groups.items():
+                versions.sort(key=lambda v: v["timestamp"], reverse=True)
+                bundle_path = versions[0]["path"]
+                try:
+                    if bundle_path.endswith(".enc"):
+                        click.echo(f"  [SKIP] {prefix} — encrypted bundle (use manual sync-pull)", err=True)
+                        continue
+                    importer.import_session(bundle_path, force=force or True, project_path_override=resolved)
+                    click.echo(f"  [OK] {prefix}")
+                    ok += 1
+                except Exception as e:
+                    click.echo(f"  [ERROR] {prefix}: {e}", err=True)
+                    fail += 1
+
+            click.echo(f"\n[OK] Pulled {ok} session(s)" + (f", {fail} failed" if fail else "") + ".")
+        except click.Abort:
+            raise
+        except Exception as e:
+            click.echo(f"[ERROR] {e}", err=True)
+            raise click.Abort()
+        return
 
     try:
         resolved_repo = _resolve_repo(repo)

@@ -178,22 +178,54 @@ export function parseRepoOutput(text: string): string | null {
 // ---------------------------------------------------------------------------
 
 /** Extract human-readable project name from encoded dir name.
- *  "c--Users-Daniel-Documents-projetos-my-app" → "my-app"
+ *
+ *  Claude Code encodes the full absolute path, replacing every path separator
+ *  and the drive colon with '-'. The drive letter produces '--' (colon + slash).
+ *  Example: "C:/Users/fsf/Documents/projetos/claude-session-sync"
+ *        → "c--Users-fsf-Documents-projetos-claude-session-sync"
+ *
+ *  Because hyphens are used for BOTH path separators AND word separators inside
+ *  folder names, we cannot reliably reconstruct the original path. Instead we:
+ *  1. Strip the drive prefix (up to '--').
+ *  2. Find the longest suffix that starts after a known OS breadcrumb
+ *     (users/{username}/…/documents|projetos|projects|dev|workspace/…).
+ *  3. Return the remainder as the display label.
+ *
+ *  Result examples:
+ *    "c--users-fsf-documents-projetos-claude-session-sync" → "claude-session-sync"
+ *    "c--users-fsf-documents-projetos-plataforma-cadeeu"   → "plataforma-cadeeu"
+ *    "home-alice-code-my-project"                          → "my-project"
  */
 export function decodeProjectDir(encodedDir: string): string {
-  // The encoding replaces path separators with '-', so we try to recover
-  // the last meaningful segment. Common pattern: ends with the project folder name.
-  // e.g. "c--users-daniel-documents-projetos-my-project" → "my-project"
-  const parts = encodedDir.split('-');
-  // Drop leading single chars (drive letter artifacts like "c", "users", etc.)
-  // and join from "projetos" onward, or just return the last meaningful chunk.
-  const projectosIdx = parts.findIndex(p => p === 'projetos' || p === 'projects' || p === 'documents');
-  if (projectosIdx >= 0 && projectosIdx < parts.length - 1) {
-    return parts.slice(projectosIdx + 1).join('-');
+  const lower = encodedDir.toLowerCase();
+
+  // Ordered list of breadcrumbs we want to strip up to (inclusive).
+  // We'll try each pattern and take the shortest surviving suffix.
+  const BREADCRUMBS = [
+    // Windows: users/{name}/documents/projetos  or  users/{name}/documents/projects
+    /^[a-z]--users-[^-]+-documents-(?:projetos|projects|dev|workspace|repos|code|src)-(.+)$/,
+    // Windows: users/{name}/documents
+    /^[a-z]--users-[^-]+-documents-(.+)$/,
+    // Windows: users/{name}/  (no documents)
+    /^[a-z]--users-[^-]+-(.+)$/,
+    // Linux/Mac: home/{name}/projetos|projects|…
+    /^home-[^-]+-(?:projetos|projects|dev|workspace|repos|code|src)-(.+)$/,
+    // Linux/Mac: home/{name}/
+    /^home-[^-]+-(.+)$/,
+    // Strip drive prefix only
+    /^[a-z]--(.+)$/,
+  ];
+
+  for (const re of BREADCRUMBS) {
+    const m = lower.match(re);
+    if (m) {
+      // Use original casing from the same byte-range
+      const startIdx = encodedDir.length - m[1].length;
+      return encodedDir.slice(startIdx);
+    }
   }
-  // Fallback: return last non-empty segment after splitting on '--'
-  const doubleDash = encodedDir.split('--');
-  return doubleDash[doubleDash.length - 1] || encodedDir;
+
+  return encodedDir;
 }
 
 /** Format ISO date string to a short readable form: "2026-03-07" */

@@ -1,10 +1,10 @@
-name: Build CLI Binaries
+name: Build CLI Binaries & Publish Extension
 
 on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:  # permite rodar manualmente
+  workflow_dispatch:  # permite rodar manualmente sem tag
 
 jobs:
   build:
@@ -81,8 +81,15 @@ jobs:
       - name: Package extension
         run: cd vscode-extension && npx @vscode/vsce package
 
-      - name: Upload VSIX
+      - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4
         with:
           name: vsix
           path: vscode-extension/*.vsix
+
+      # Publish only when triggered by a version tag (v*)
+      - name: Publish to VS Code Marketplace
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: cd vscode-extension && npx @vscode/vsce publish --packagePath *.vsix
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}

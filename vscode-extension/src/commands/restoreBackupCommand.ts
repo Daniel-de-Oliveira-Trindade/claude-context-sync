@@ -19,12 +19,14 @@ export function registerRestoreBackupCommand(
       const label = node.backup.timestampDisplay;
       const project = node.backup.projectFolder || '(root)';
       const confirm = await vscode.window.showWarningMessage(
-        `Restore backup from ${label} (${project})? This will overwrite the current session.`,
+        `Restore backup from ${label} (project: ${project})?\n\nThe session will be restored to its original project folder. Open that folder in Claude Code afterwards to resume it.`,
         { modal: true },
         'Restore'
       );
       if (confirm !== 'Restore') { return; }
 
+      // No --project-path override: importer uses the path stored in the bundle metadata,
+      // which means the session goes back to its original project folder.
       const args = ['import', node.backup.fullPath, '--force'];
       statusBar.setState('syncing', 'Restoring backup...');
 
@@ -49,7 +51,7 @@ export function registerRestoreBackupCommand(
         if (success) {
           statusBar.setState('success', 'Backup restored');
           vscode.window.showInformationMessage(
-            `Claude Sync: Backup from ${label} restored. You can now resume it in Claude Code.`
+            `Claude Sync: Backup from ${label} restored to project "${project}". Open that folder in Claude Code to resume the session.`
           );
           localTree.refresh();
         } else {

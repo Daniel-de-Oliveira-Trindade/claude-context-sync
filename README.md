@@ -6,7 +6,7 @@
 
 **Claude Context Sync** is a CLI tool that exports and imports Claude Code sessions between devices. It solves the problem of absolute path differences between machines using a smart path-transformation system.
 
-**Current version: 0.4.0**
+**Current version: 0.5.1**
 
 **Features:**
 - Full session transfer: messages, file-history, and todos
@@ -15,14 +15,17 @@
 - Automatic progress bars for large sessions
 - Git-based sync via private repository (`sync-push` / `sync-pull`)
 - Interactive session picker — no need to copy/paste UUIDs
+- `sync-push --all` — push all sessions from the current project at once
+- `sync-pull --all` — pull all available bundles from the repository at once
 - Descriptive Git commit labels (project name + first prompt)
 - SHA256 integrity validation
 - Backwards-compatible with older bundles (v1.0.0)
 - **Automatic sync hooks** — SessionEnd/SessionStart integration with Claude Code (`hooks-install`)
 - **Optional AES-256-GCM encryption** — passphrase-based, no raw key files to manage (`--encrypt`)
 - **Structured logs** — `hook.log` for automatic sync, `--verbose` for manual commands
+- **Local bundle backup** — every push/pull saves a copy in `~/.claude-sync-git/backups/` for local rollback
 
-> **Platform support:** Fully tested on Windows. Linux and macOS support is planned — it likely works already with minor adaptations. Community testing welcome!
+> **Platform support:** Fully tested on Windows. Linux and macOS binaries available via the VSCode extension (bundled) and GitHub Actions releases.
 
 ---
 
@@ -484,7 +487,7 @@ The URL is saved in `config/path_mappings.json` and can be overwritten at any ti
 Export a session and push it to the Git repository.
 
 ```bash
-claude-sync sync-push [SESSION_ID] [--session UUID] [--repo URL] [--output NAME] [--compress] [--encrypt] [--auto] [--verbose]
+claude-sync sync-push [SESSION_ID] [--session UUID] [--repo URL] [--output NAME] [--compress] [--encrypt] [--all] [--auto] [--verbose]
 ```
 
 | Option/Argument | Description |
@@ -495,6 +498,7 @@ claude-sync sync-push [SESSION_ID] [--session UUID] [--repo URL] [--output NAME]
 | `--output` | Bundle filename (default: `<session-id>.bundle`) |
 | `--compress` | Compress with gzip |
 | `--encrypt` | Encrypt bundle with AES-256-GCM (prompts for passphrase, or uses saved key) |
+| `--all` | Push every session found in the current project directory at once |
 | `--auto` | Non-interactive mode for hooks — no prompts, errors logged to `hook.log` |
 | `--verbose` | Write detailed steps to `~/.claude-context-sync/logs/app.log` |
 
@@ -533,7 +537,7 @@ sync: session 097f3474 | my-app | Fix the authentication bug in login
 Pull a bundle from the Git repository and import the session.
 
 ```bash
-claude-sync sync-pull [SESSION_ID_PREFIX] [--repo URL] [--force] [--project-path PATH] [--latest] [--auto] [--verbose]
+claude-sync sync-pull [SESSION_ID_PREFIX] [--repo URL] [--force] [--project-path PATH] [--latest] [--all] [--auto] [--verbose]
 ```
 
 | Option/Argument | Description |
@@ -543,6 +547,7 @@ claude-sync sync-pull [SESSION_ID_PREFIX] [--repo URL] [--force] [--project-path
 | `--force` | Overwrite the session if it already exists locally |
 | `--project-path` | Local project path on this device (default: current directory) |
 | `--latest` | Pull the most recently pushed bundle — used by `SessionStart` hooks |
+| `--all` | Pull the latest version of every session in the repository at once |
 | `--auto` | Non-interactive mode for hooks — no prompts, errors logged to `hook.log` |
 | `--verbose` | Write detailed steps to `~/.claude-context-sync/logs/app.log` |
 
@@ -606,12 +611,11 @@ To import a bundle:
 
 ### `claude-sync hooks-install`
 
-> ⚠️ **WIP — Not stable on Windows.** This feature is under active development and has known issues. Use manual `sync-push` / `sync-pull` until this is resolved. See [issue #hooks-wip] for details.
-
 Install automatic sync hooks in Claude Code. After running this command, sessions are pushed automatically when you close a conversation and pulled when you open Claude Code.
 
 ```bash
-claude-sync hooks-install
+claude-sync hooks-install           # install (or show status if already installed)
+claude-sync hooks-install --force   # update hooks to the current version
 ```
 
 This writes to `~/.claude/settings.json`:
@@ -620,12 +624,7 @@ This writes to `~/.claude/settings.json`:
 
 A backup is saved to `~/.claude/settings.json.bak` before any changes.
 
-Run `hooks-install` on each machine you want to sync automatically. It is **idempotent** — safe to run multiple times.
-
-**Known issues (WIP):**
-- `$CLAUDE_SESSION_ID` is not expanded by Windows shell — partial workaround applied, not fully validated
-- `hooks-uninstall` may fail silently when hooks use absolute executable paths
-- Not fully validated in the VSCode extension context — designed for terminal CLI
+Run `hooks-install` on each machine you want to sync automatically. Running it again when already installed shows the current hook status without modifying anything. Use `--force` to update hooks to the latest version.
 
 ---
 
@@ -844,21 +843,31 @@ The passphrase entered does not match the one used to encrypt the bundle. Make s
 - [x] Descriptive Git commit labels (project name + first prompt)
 - [x] SHA256 integrity validation
 
-### v0.4.0 (current)
+### v0.4.0
 - [x] Automatic sync hooks (`hooks-install` / `hooks-uninstall`) — SessionEnd + SessionStart
 - [x] Non-interactive mode (`--auto`) for hook execution
 - [x] Pull most recent bundle (`--latest`) for SessionStart hooks
 - [x] Optional AES-256-GCM encryption (`--encrypt`, `crypto-setup`)
 - [x] Passphrase-derived keys via PBKDF2 — no raw key file management
 - [x] Structured logs: `hook.log` (always) + `app.log` (`--verbose`)
-- [x] Timestamp in bundle filename (`session_YYYYMMDD-HHMMSS.bundle`) — easy to identify when each bundle was created
+- [x] Timestamp in bundle filename (`session_YYYYMMDD-HHMMSS.bundle`)
 - [x] `import` command supports encrypted bundles (`.bundle.gz.enc`) directly
 
-### v0.5.0 (next)
-- [ ] Linux and macOS support
-- [ ] `sync-push --all` to push all sessions from a project at once
-- [ ] `sync-pull --all` to pull all available bundles
-- [ ] **Local bundle backup** — keep a copy of every pushed/pulled bundle in `~/.claude-context-sync/backups/` so sessions are never lost even if the remote is unavailable or a push overwrites a previous version on the same machine
+### v0.5.0
+- [x] Bundles organized per project in the git repo (`{project}/session.bundle.gz`)
+- [x] Local bundle backup after every push/pull (`~/.claude-sync-git/backups/`)
+- [x] VSCode Extension — push, pull, browse sessions and backups without terminal
+- [x] Bundled CLI binary inside the extension — no Python required for extension users
+- [x] `hooks-install --force` to update existing hooks; status display when already installed
+- [x] Session discovery via direct `.jsonl` scan (no `sessions-index.json` required)
+
+### v0.5.1 (current)
+- [x] `sync-push --all` — push all sessions from the current project at once
+- [x] `sync-pull --all` — pull all available bundles from the repository at once
+- [x] Project name correctly decoded from Claude's encoded directory names
+- [x] `sync-push` detects project name even when `sessions-index.json` is missing
+- [x] VSCode extension warns on project mismatch when pulling a remote session
+- [x] Linux and macOS binaries built via GitHub Actions and bundled in the extension
 
 ### v1.0.0 (future)
 - [ ] Optional cloud backend
