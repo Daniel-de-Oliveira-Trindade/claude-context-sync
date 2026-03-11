@@ -17,7 +17,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // Detect CLI
   const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  const cliLocation = await detectCli(getCliPath(), workspace);
+  const cliLocation = await detectCli(getCliPath(), workspace, context.extensionPath);
 
   if (!cliLocation) {
     vscode.window.showWarningMessage(
@@ -35,7 +35,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   const cliPath = cliLocation?.path ?? 'claude-sync';
-  outputChannel.appendLine(`Claude Sync activated. CLI: ${cliPath} ${cliLocation?.version ?? '(not found)'}`);
+  const cliSource = cliLocation?.bundled ? '(bundled)' : '(system)';
+  outputChannel.appendLine(`Claude Sync activated. CLI: ${cliPath} ${cliLocation?.version ?? '(not found)'} ${cliLocation ? cliSource : ''}`);
 
   const runner = new CliRunner(cliPath, outputChannel);
 

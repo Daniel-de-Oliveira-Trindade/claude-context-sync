@@ -44,6 +44,7 @@ export interface CliResult {
 export interface CliLocation {
   path: string;
   version: string;
+  bundled?: boolean;
 }
 
 export interface SessionsIndex {

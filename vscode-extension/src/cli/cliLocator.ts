@@ -6,6 +6,24 @@ import { CliLocation } from '../types';
 
 const EXE_NAME = process.platform === 'win32' ? 'claude-sync.exe' : 'claude-sync';
 
+const BUNDLED_EXE_NAME: Record<string, string> = {
+  'win32': 'claude-sync-win32.exe',
+  'darwin': 'claude-sync-darwin',
+  'linux': 'claude-sync-linux',
+};
+
+function getBundledCli(extensionPath: string): string | null {
+  const name = BUNDLED_EXE_NAME[process.platform];
+  if (!name) { return null; }
+  const binPath = path.join(extensionPath, 'bin', name);
+  if (!fs.existsSync(binPath)) { return null; }
+  // Ensure executable on unix
+  if (process.platform !== 'win32') {
+    try { fs.chmodSync(binPath, 0o755); } catch { /* ignore */ }
+  }
+  return binPath;
+}
+
 function probe(candidate: string): CliLocation | null {
   try {
     const result = cp.spawnSync(candidate, ['--version'], {
@@ -89,21 +107,31 @@ function searchVenv(workspacePath?: string): string[] {
 
 export async function detectCli(
   settingOverride?: string,
-  workspacePath?: string
+  workspacePath?: string,
+  extensionPath?: string
 ): Promise<CliLocation | null> {
-  // 1. Explicit setting
+  // 1. Explicit setting override
   if (settingOverride && settingOverride.trim()) {
     const loc = probe(settingOverride.trim());
     if (loc) { return loc; }
   }
 
-  // 2. PATH
+  // 2. Bundled binary inside the extension (highest priority after override)
+  if (extensionPath) {
+    const bundled = getBundledCli(extensionPath);
+    if (bundled) {
+      const loc = probe(bundled);
+      if (loc) { return { ...loc, bundled: true }; }
+    }
+  }
+
+  // 3. PATH
   for (const candidate of searchPath()) {
     const loc = probe(candidate);
     if (loc) { return loc; }
   }
 
-  // 3. Python Scripts directories (Windows)
+  // 4. Python Scripts directories (Windows)
   if (process.platform === 'win32') {
     for (const candidate of globPythonScripts()) {
       const loc = probe(candidate);
@@ -111,7 +139,7 @@ export async function detectCli(
     }
   }
 
-  // 4. Virtual env in workspace
+  // 5. Virtual env in workspace
   for (const candidate of searchVenv(workspacePath)) {
     const loc = probe(candidate);
     if (loc) { return loc; }
