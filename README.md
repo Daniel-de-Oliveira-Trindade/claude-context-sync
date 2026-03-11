@@ -24,6 +24,37 @@
 
 > **Platform support:** Fully tested on Windows. Linux and macOS support is planned — it likely works already with minor adaptations. Community testing welcome!
 
+---
+
+## VSCode Extension
+
+The easiest way to use Claude Context Sync is through the **VSCode extension** — no terminal required.
+
+[![Install on VSCode](https://img.shields.io/badge/VSCode-Install%20Extension-007ACC?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=DaleuStudio.claude-context-sync)
+
+**[→ Claude Context Sync on VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=DaleuStudio.claude-context-sync)**
+
+The extension includes the CLI bundled inside — no Python or pip installation needed. Just install the extension and it works.
+
+### What the extension provides
+
+- **Local Sessions panel** — browse all your Claude Code sessions grouped by project
+- **Remote Bundles panel** — see all sessions stored in your Git repo
+- **Push / Pull buttons** — sync sessions with one click directly from the sidebar
+- **Backup history** — view and restore previous backups of any session by date
+- **Settings UI** — configure everything without touching the terminal
+
+### Quick start with the extension
+
+1. Install the extension from the Marketplace
+2. Open VSCode and click the Claude Sync icon in the Activity Bar
+3. Open Settings (`Ctrl+,`) → search `claudeContextSync` → set **Default Repo** to your private Git repo URL
+4. Use the **↑ push** button to send a session, or **↓ pull** to receive one from another machine
+
+> The extension still requires Git installed and a private repository configured — see the [Git Setup](#git-setup) section below.
+
+---
+
 ## The Problem
 
 When working across two different PCs, you constantly lose your Claude Code conversation context because:
