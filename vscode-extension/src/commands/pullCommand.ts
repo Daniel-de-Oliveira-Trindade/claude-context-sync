@@ -97,15 +97,19 @@ export function registerPullCommand(
     vscode.commands.registerCommand('claudeContextSync.pull', async (node?: RemoteSessionNode | RemoteVersionNode) => {
       let sessionPrefix: string | undefined;
       let bundleProjectFolder: string | undefined;
+      let exactBundleFile: string | undefined;
 
       if (node instanceof RemoteVersionNode) {
         sessionPrefix = node.sessionPrefix;
+        exactBundleFile = node.version.filename;
         // find the group to get projectFolder
         const group = remoteTree.getGroups().find(g => g.sessionPrefix === sessionPrefix);
         bundleProjectFolder = group?.projectFolder;
       } else if (node instanceof RemoteSessionNode) {
         sessionPrefix = node.group.sessionPrefix;
         bundleProjectFolder = node.group.projectFolder;
+        // Always pull the latest version when clicking the session node
+        exactBundleFile = node.group.versions[0]?.filename;
       } else {
         // Command Palette: show QuickPick from remote tree data
         const groups = remoteTree.getGroups();
@@ -177,6 +181,9 @@ export function registerPullCommand(
       }
 
       const args = ['sync-pull', sessionPrefix, '--force'];
+      if (exactBundleFile) {
+        args.push('--bundle-file', exactBundleFile);
+      }
       if (targetProjectPath) {
         args.push('--project-path', targetProjectPath);
       }

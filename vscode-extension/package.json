@@ -2,7 +2,7 @@
   "name": "claude-context-sync",
   "displayName": "Claude Context Sync",
   "description": "Sync Claude Code sessions between machines via Git",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "publisher": "DaleuStudio",
   "license": "MIT",
   "icon": "media/icon.png",

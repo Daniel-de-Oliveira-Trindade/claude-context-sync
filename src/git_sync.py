@@ -238,6 +238,26 @@ class GitSync:
 
         return None
 
+    def pull_bundle_by_filename(self, filename: str) -> Optional[str]:
+        """Find a bundle by its exact filename (searches project subfolders then root)."""
+        self.ensure_repo()
+
+        for subdir in self.local_dir.iterdir():
+            if not subdir.is_dir():
+                continue
+            if subdir.name.startswith(".") or subdir.name == "backups":
+                continue
+            candidate = subdir / filename
+            if candidate.is_file():
+                return str(candidate)
+
+        # Backward compat: flat root
+        candidate = self.local_dir / filename
+        if candidate.is_file():
+            return str(candidate)
+
+        return None
+
     def list_bundles(self) -> List[Dict]:
         """
         List all bundles available in the repository.

@@ -779,7 +779,8 @@ def sync_push(session_id, session_opt, repo, output, compress, encrypt, auto, ve
 @click.option('--auto', is_flag=True, default=False, help='Non-interactive mode for hooks: no prompts, errors go to log file')
 @click.option('--verbose', is_flag=True, default=False, help='Write detailed output to ~/.claude-context-sync/logs/app.log')
 @click.option('--all', 'pull_all', is_flag=True, default=False, help='Pull all available bundles from the repository (latest version of each session)')
-def sync_pull(session_id_prefix, repo, force, project_path, latest, auto, verbose, pull_all):
+@click.option('--bundle-file', default=None, help='Exact bundle filename to pull (used by extension to pull a specific version)')
+def sync_pull(session_id_prefix, repo, force, project_path, latest, auto, verbose, pull_all, bundle_file):
     """Pull bundle from Git repository and import session.
 
     If SESSION_ID_PREFIX is omitted, shows an interactive grouped picker.
@@ -901,6 +902,11 @@ def sync_pull(session_id_prefix, repo, force, project_path, latest, auto, verbos
             session_id_prefix = chosen_group["session_prefix"]
             bundle_path = chosen_version["path"]
             click.echo()
+        elif bundle_file:
+            bundle_path = git_sync.pull_bundle_by_filename(bundle_file)
+            if bundle_path is None:
+                click.echo(f"[ERROR] Bundle file not found: {bundle_file}", err=True)
+                raise click.Abort()
         else:
             bundle_path = git_sync.pull_bundle(session_id_prefix)
 

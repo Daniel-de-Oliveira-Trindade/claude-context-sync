@@ -1,6 +1,7 @@
 import * as cp from 'child_process';
 import * as vscode from 'vscode';
 import { CliResult } from '../types';
+import { getDefaultRepo } from '../config/settings';
 
 export class CliRunner {
   constructor(
@@ -12,6 +13,17 @@ export class CliRunner {
     this.cliPath = newPath;
   }
 
+  /** Inject --repo <url> after the subcommand when a defaultRepo is configured and not already present. */
+  private injectRepo(args: string[]): string[] {
+    const repo = getDefaultRepo();
+    if (!repo || args.includes('--repo')) { return args; }
+    // Only inject --repo for commands that accept it
+    const REPO_COMMANDS = ['sync-push', 'sync-pull', 'sync-list', 'repo'];
+    if (!REPO_COMMANDS.includes(args[0])) { return args; }
+    // Insert after the subcommand (first arg)
+    return [args[0], '--repo', repo, ...args.slice(1)];
+  }
+
   async run(
     args: string[],
     options?: {
@@ -20,6 +32,7 @@ export class CliRunner {
       timeoutMs?: number;
     }
   ): Promise<CliResult> {
+    args = this.injectRepo(args);
     return new Promise((resolve) => {
       const timeout = options?.timeoutMs ?? 60_000;
       let timedOut = false;

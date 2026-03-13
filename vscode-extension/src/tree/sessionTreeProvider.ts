@@ -29,6 +29,11 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
       this.sessions = parseListOutput(result.stdout);
     } else {
       this.sessions = [];
+      // Don't show error on first load if there are genuinely no sessions yet
+      const errText = (result.stderr || result.stdout).trim();
+      if (errText && !errText.includes('No sessions found') && !errText.includes('No projects found')) {
+        vscode.window.showWarningMessage(`Claude Sync: Could not load local sessions. Check the Output panel for details.`);
+      }
     }
 
     // Load local backups from filesystem (no CLI needed)
