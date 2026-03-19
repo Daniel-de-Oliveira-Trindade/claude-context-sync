@@ -10,6 +10,7 @@ setup(
         "jsonschema>=4.17.0",
         "tqdm>=4.65.0",
         "cryptography>=41.0.0",
+        "watchdog>=3.0.0",
     ],
     entry_points={
         "console_scripts": [

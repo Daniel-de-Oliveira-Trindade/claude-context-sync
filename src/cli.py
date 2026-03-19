@@ -15,6 +15,7 @@ Available commands:
 - hooks-install: Install automatic SessionEnd/SessionStart hooks in Claude Code
 - hooks-uninstall: Remove automatic hooks from Claude Code
 - crypto-setup: Configure encryption passphrase for automatic encrypted sync
+- watch: File watcher daemon — auto-push sessions when .jsonl files change
 """
 
 import re
@@ -464,6 +465,77 @@ def repo(url):
         raise click.Abort()
 
 
+@cli.command('server-url')
+@click.argument('url', required=False, default=None)
+def server_url(url):
+    """Set or show the central sync server URL.
+
+    Without arguments, shows the currently configured server URL.
+    With a URL argument, sets it as the new default.
+
+    When a server URL is configured, sync-push/pull/list use HTTP
+    instead of Git. Git remains as fallback.
+    """
+    from .server_client import get_server_url, set_server_url
+    if url:
+        set_server_url(url)
+        click.echo(f"[OK] Server URL set to: {url}")
+        click.echo(f"     Run: claude-sync token --save TOKEN  to configure your access token")
+    else:
+        current = get_server_url()
+        if current:
+            click.echo(f"[OK] Server URL: {current}")
+        else:
+            click.echo("[INFO] No server URL configured (using Git mode).")
+            click.echo("       Run: claude-sync server-url <url>")
+
+
+@cli.command('token')
+@click.option('--save', 'save_token', default=None, metavar='TOKEN', help='Save your access token')
+@click.option('--show', is_flag=True, help='Show if a token is configured (masked)')
+@click.option('--create-user', 'create_user', default=None, metavar='USERNAME', help='Admin: create a new user and print their token')
+@click.option('--admin', is_flag=True, default=False, help='Grant admin role to the new user (use with --create-user)')
+def token_cmd(save_token, show, create_user, admin):
+    """Manage server access tokens.
+
+    \b
+    Examples:
+      claude-sync token --save TOKEN          # save your token locally
+      claude-sync token --show                # check if token is configured
+      claude-sync token --create-user bob     # admin: create user and get token
+    """
+    from .server_client import get_token, set_token, create_admin_user, get_server_url
+
+    if save_token:
+        set_token(save_token)
+        click.echo("[OK] Token saved.")
+        return
+
+    if show:
+        t = get_token()
+        if t:
+            click.echo(f"[OK] Token configured: {t[:6]}{'*' * (len(t) - 6)}")
+        else:
+            click.echo("[INFO] No token configured.")
+        return
+
+    if create_user:
+        if not get_server_url():
+            click.echo("[ERROR] No server URL configured. Run: claude-sync server-url <url>", err=True)
+            raise click.Abort()
+        try:
+            result = create_admin_user(create_user, is_admin=admin)
+            click.echo(f"[OK] User '{create_user}' created.")
+            click.echo(f"     Token: {result['token']}")
+            click.echo(f"     {result['warning']}")
+        except Exception as e:
+            click.echo(f"[ERROR] {e}", err=True)
+            raise click.Abort()
+        return
+
+    click.echo("Use --save, --show, or --create-user. See --help.")
+
+
 def _push_single(session_id: str, resolved_repo: str, compress: bool, encrypt: bool,
                  auto: bool = False, verbose: bool = False) -> str:
     """
@@ -523,13 +595,27 @@ def _push_single(session_id: str, resolved_repo: str, compress: bool, encrypt: b
         except PassphraseNotFound:
             pass  # skip encryption silently if no passphrase saved
 
-    git_sync = GitSync(repo_url=resolved_repo)
-    dest = git_sync.push_bundle(final_output, session_id, label=label, project_name=project_name)
+    from .server_client import get_server_url, push_bundle as server_push_bundle
 
-    try:
-        git_sync.save_local_backup(final_output, session_id[:8], project_name=project_name)
-    except Exception:
-        pass
+    server_url = get_server_url()
+    if server_url:
+        # Server mode: upload via HTTP
+        try:
+            result = server_push_bundle(Path(final_output), project_name or "default")
+            dest = f"{server_url}/sessions/{result.get('filename', Path(final_output).name)}"
+        except Exception as e:
+            if not auto:
+                click.echo(f"  [WARN] Server push failed ({e}), falling back to git...", err=True)
+            git_sync = GitSync(repo_url=resolved_repo)
+            dest = git_sync.push_bundle(final_output, session_id, label=label, project_name=project_name)
+    else:
+        # Git mode
+        git_sync = GitSync(repo_url=resolved_repo)
+        dest = git_sync.push_bundle(final_output, session_id, label=label, project_name=project_name)
+        try:
+            git_sync.save_local_backup(final_output, session_id[:8], project_name=project_name)
+        except Exception:
+            pass
 
     try:
         shutil.rmtree(_tmp_dir, ignore_errors=True)
@@ -793,6 +879,55 @@ def sync_pull(session_id_prefix, repo, force, project_path, latest, auto, verbos
     if verbose:
         logger.set_verbose(True)
 
+    from .server_client import get_server_url, pull_bundle as server_pull_bundle, list_sessions as server_list_sessions
+    import tempfile as _tmpmod
+
+    server_url = get_server_url()
+
+    # Server mode: intercept before git logic
+    if server_url and not pull_all:
+        try:
+            resolved = project_path or str(Path.cwd())
+            tmp_dir = Path(_tmpmod.mkdtemp(prefix="claude-sync-pull-"))
+            if session_id_prefix:
+                bundle_path = str(server_pull_bundle(session_id_prefix, tmp_dir, filename=bundle_file))
+            elif latest:
+                bundles = server_list_sessions()
+                if not bundles:
+                    if auto:
+                        sys.exit(0)
+                    click.echo("[INFO] No bundles found on server. Nothing to pull.")
+                    return
+                bundles.sort(key=lambda b: b["modified"], reverse=True)
+                bundle_path = str(server_pull_bundle(bundles[0]["session_prefix"], tmp_dir))
+            else:
+                # Interactive picker from server
+                bundles = server_list_sessions()
+                if not bundles:
+                    click.echo("[ERROR] No bundles found on server.", err=True)
+                    raise click.Abort()
+                click.echo(f"Available sessions on server:\n")
+                for i, b in enumerate(bundles, 1):
+                    click.echo(f"  [{i}] {b['session_prefix']}  {b['project']}  {b['filename']}")
+                raw = click.prompt("Choose session [number]")
+                try:
+                    chosen = bundles[int(raw) - 1]
+                except (ValueError, IndexError):
+                    click.echo(f"[ERROR] Invalid choice.", err=True)
+                    raise click.Abort()
+                bundle_path = str(server_pull_bundle(chosen["session_prefix"], tmp_dir, filename=chosen["filename"]))
+
+            if not auto:
+                click.echo(f"Importing session from server bundle...")
+            importer = SessionImporter()
+            importer.import_session(bundle_path, force=force, project_path_override=resolved)
+            click.echo(f"[OK] Session imported to: {resolved}")
+            return
+        except click.Abort:
+            raise
+        except Exception as e:
+            click.echo(f"  [WARN] Server pull failed ({e}), falling back to git...", err=True)
+
     # --all: pull the latest version of every session in the repository
     if pull_all:
         try:
@@ -1009,7 +1144,24 @@ def sync_pull(session_id_prefix, repo, force, project_path, latest, auto, verbos
 @cli.command('sync-list')
 @click.option('--repo', default=None, help='Git repository URL (SSH or HTTPS, or set default with: claude-sync repo <url>)')
 def sync_list(repo):
-    """List bundles available in Git repository, grouped by session."""
+    """List bundles available in Git repository or server, grouped by session."""
+    from .server_client import get_server_url, list_sessions as server_list_sessions
+
+    server_url = get_server_url()
+    if server_url:
+        try:
+            bundles = server_list_sessions()
+            if not bundles:
+                click.echo("No bundles found on server")
+                return
+            click.echo(f"Fetching bundle list from server: {server_url}\n")
+            click.echo(f"Found {len(bundles)} bundle(s):\n")
+            for b in bundles:
+                click.echo(f"  {b['session_prefix']}  {b['project']}  {b['filename']}  ({b['size']} bytes)")
+            return
+        except Exception as e:
+            click.echo(f"  [WARN] Server list failed ({e}), falling back to git...", err=True)
+
     try:
         resolved_repo = _resolve_repo(repo)
         click.echo(f"Fetching bundle list from: {resolved_repo}\n")
@@ -1166,6 +1318,114 @@ def crypto_setup():
     except Exception as e:
         click.echo(f"[ERROR] Error setting up encryption: {e}", err=True)
         raise click.Abort()
+
+
+@cli.command('watch')
+@click.option('--daemon', is_flag=True, default=False, help='Run in background (saves PID to ~/.claude-context-sync/watch.pid)')
+@click.option('--stop', is_flag=True, default=False, help='Stop the background daemon')
+@click.option('--status', is_flag=True, default=False, help='Show watcher status')
+@click.option('--repo', default=None, help='Git repository URL (or use configured default)')
+@click.option('--debounce', default=30, show_default=True, help='Seconds to wait after last change before pushing')
+def watch(daemon, stop, status, repo, debounce):
+    """Watch for session changes and auto-push to Git.
+
+    Monitors ~/.claude/projects/**/*.jsonl for modifications.
+    After DEBOUNCE seconds of inactivity, automatically runs sync-push.
+
+    \b
+    Examples:
+      claude-sync watch                # run in foreground (Ctrl-C to stop)
+      claude-sync watch --daemon       # run in background
+      claude-sync watch --status       # check if daemon is running
+      claude-sync watch --stop         # stop the background daemon
+    """
+    from .watcher import (
+        WATCHDOG_AVAILABLE, SessionWatcher,
+        get_status, read_pid, is_running, clear_pid, write_pid, _log,
+        PID_FILE, LOG_FILE,
+    )
+
+    if not WATCHDOG_AVAILABLE:
+        click.echo("[ERROR] watchdog is not installed.", err=True)
+        click.echo("Install it with:\n  pip install watchdog", err=True)
+        raise click.Abort()
+
+    # --status
+    if status:
+        s = get_status()
+        if s["running"]:
+            click.echo(f"[OK] Watcher is running (PID {s['pid']})")
+        else:
+            click.echo("[--] Watcher is not running")
+        if s["last_time"]:
+            click.echo(f"     Last sync : {s['last_time'][:19]} — {s.get('last_session', '')[:8]} ({s.get('last_status', '')})")
+        click.echo(f"     Log file  : {s['log_file']}")
+        return
+
+    # --stop
+    if stop:
+        pid = read_pid()
+        if pid is None or not is_running(pid):
+            click.echo("[--] Watcher is not running")
+            clear_pid()
+            return
+        import signal as _sig
+        try:
+            import os as _os
+            _os.kill(pid, _sig.SIGTERM)
+            click.echo(f"[OK] Stopped watcher (PID {pid})")
+        except Exception as e:
+            click.echo(f"[ERROR] Could not stop process {pid}: {e}", err=True)
+        clear_pid()
+        return
+
+    # Check if already running
+    existing_pid = read_pid()
+    if existing_pid and is_running(existing_pid):
+        click.echo(f"[--] Watcher already running (PID {existing_pid})")
+        click.echo(f"     Use --stop to stop it, or --status to check.")
+        return
+
+    repo_url = None
+    if repo:
+        repo_url = repo
+    else:
+        try:
+            repo_url = _resolve_repo(None)
+        except click.UsageError:
+            repo_url = None  # will use default configured at push time
+
+    if daemon:
+        # Fork a background process
+        import subprocess as _sp
+        from .watcher import _resolve_executable as _rex
+        exe = _rex()
+        args = [exe, "watch", "--debounce", str(debounce)]
+        if repo_url:
+            args += ["--repo", repo_url]
+        proc = _sp.Popen(args, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+                         start_new_session=True)
+        click.echo(f"[OK] Watcher started in background (PID {proc.pid})")
+        click.echo(f"     Monitoring: ~/.claude/projects/")
+        click.echo(f"     Log file  : {LOG_FILE}")
+        click.echo(f"     Stop with : claude-sync watch --stop")
+        # Write PID from the parent so --status works immediately
+        PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+        PID_FILE.write_text(str(proc.pid))
+        return
+
+    # Foreground mode
+    write_pid()
+    click.echo(f"[OK] Watching ~/.claude/projects/ (debounce {debounce}s)")
+    click.echo(f"     Ctrl-C to stop")
+    if repo_url:
+        click.echo(f"     Repo: {repo_url}")
+    click.echo()
+    try:
+        watcher = SessionWatcher(repo_url=repo_url, debounce_seconds=debounce)
+        watcher.start(blocking=True)
+    finally:
+        clear_pid()
 
 
 if __name__ == '__main__':

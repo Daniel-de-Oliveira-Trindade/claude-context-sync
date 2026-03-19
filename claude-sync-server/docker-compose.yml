@@ -1,0 +1,15 @@
+services:
+  sync-server:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - sync-data:/data
+    environment:
+      - SYNC_DATA_DIR=/data
+      # Optional: set to enable git backup of all bundles
+      # - SYNC_GIT_BACKUP_REPO=git@github.com:sua-org/backup-repo.git
+    restart: unless-stopped
+
+volumes:
+  sync-data:
