@@ -65,6 +65,24 @@
           "default": false,
           "description": "Internal: whether the Setup Wizard has been completed. Set to false to re-run the wizard.",
           "scope": "machine"
+        },
+        "claudeContextSync.serverUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Central sync server URL (e.g. http://your-server:8000). When set, sessions are synced via HTTP instead of Git.",
+          "scope": "machine"
+        },
+        "claudeContextSync.serverToken": {
+          "type": "string",
+          "default": "",
+          "description": "Access token for the central sync server. Get this from your admin.",
+          "scope": "machine"
+        },
+        "claudeContextSync.autoSync": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically sync sessions in the background using the file watcher daemon.",
+          "scope": "machine"
         }
       }
     },
@@ -140,12 +158,22 @@
         "command": "claudeContextSync.restoreBackup",
         "title": "Claude Sync: Restore Backup",
         "icon": "$(history)"
+      },
+      {
+        "command": "claudeContextSync.toggleAutoSync",
+        "title": "Claude Sync: Toggle Auto Sync",
+        "icon": "$(radio-tower)"
       }
     ],
     "menus": {
       "view/title": [
         {
           "command": "claudeContextSync.refreshLocal",
+          "when": "view == claudeSyncLocal",
+          "group": "navigation"
+        },
+        {
+          "command": "claudeContextSync.toggleAutoSync",
           "when": "view == claudeSyncLocal",
           "group": "navigation"
         },

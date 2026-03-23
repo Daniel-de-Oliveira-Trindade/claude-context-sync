@@ -262,16 +262,15 @@ claude-sync inbox pull {session_prefix}
 
 ```
 [DONE] Fase 1a: File Watcher no CLI (watchdog)         ← src/watcher.py + comando watch
-[ ]    Fase 1b: Auto Sync na extensão VSCode           ← depende só da extensão
-[ ]    Fase 2a: Central Server básico (push/pull/list) ← core do servidor
-[ ]    Fase 2b: CLI adapta para HTTP quando configurado ← muda sync-push/pull
-[ ]    Fase 2c: Extensão suporta serverUrl             ← UI continua igual
-[ ]    Fase 3:  Compartilhamento + inbox               ← depende do servidor
-[ ]    Fase 4:  Admin dashboard                        ← depende do servidor
+[DONE] Fase 1b: Auto Sync na extensão VSCode           ← toggle button + status bar + autoSync setting
+[DONE] Fase 2a: Central Server básico (push/pull/list) ← claude-sync-server/ FastAPI app
+[DONE] Fase 2b: CLI adapta para HTTP quando configurado ← server-url + token commands
+[DONE] Fase 2c: Extensão suporta serverUrl             ← serverUrl + serverToken settings
+[DONE] Fase 3:  Compartilhamento + inbox               ← share + inbox commands
+[DONE] Fase 4:  Admin dashboard                        ← /admin/ web UI (Jinja2)
 ```
 
-Fase 1a concluída e testada em 2026-03-19. Fase 1b (extensão) pendente.
-Fases 2-4 são um projeto maior que pode ser desenvolvido em paralelo.
+Todas as fases concluídas na v0.6.0 (2026-03-23).
 
 ---
 
@@ -304,17 +303,34 @@ Fases 2-4 são um projeto maior que pode ser desenvolvido em paralelo.
 
 ---
 
-### ⬜ Fase 1b — Auto Sync na extensão VSCode (PENDENTE)
+### ✅ Fase 1b — Auto Sync na extensão VSCode (CONCLUÍDO)
 
 - Nova setting: `claudeContextSync.autoSync: boolean`
-- Status bar "Auto Sync: ON" + timestamp do último sync
+- Status bar "Auto Sync: ON / OFF" (clickable)
+- Toggle button ($(radio-tower)) na toolbar do Local Sessions
 - Chama `claude-sync watch --daemon` via CLI runner ao ativar
+- Na ativação da extensão: reinicia o daemon se `autoSync` estava ON
+- Na ativação: sincroniza `serverUrl` e `serverToken` para o CLI
 
 ---
 
-### ⬜ Fases 2-4 — Central Server, Sharing, Dashboard (PENDENTE)
+### ✅ Fases 2-4 — Central Server, Sharing, Dashboard (CONCLUÍDO)
 
-Ver detalhes nas seções abaixo.
+**Fase 2 — Central Server:**
+- `claude-sync-server/` — FastAPI app com push/pull/list/delete, auth por token
+- `claude-sync server-url` e `claude-sync token` — comandos CLI de configuração
+- `sync-push`/`sync-pull`/`sync-list` usam HTTP quando `server-url` configurado, fallback para git
+- Docker support: Dockerfile + docker-compose.yml
+- Git backup automático via `SYNC_GIT_BACKUP_REPO` env var
+
+**Fase 3 — Compartilhamento:**
+- `claude-sync share SESSION_PREFIX --with USER [--message MSG]`
+- `claude-sync inbox [--pull SHARE_ID] [--project-path PATH]`
+- Compartilhamento com usuário específico ou `*` para todos
+
+**Fase 4 — Admin Dashboard:**
+- Dashboard web em `/admin/` (Jinja2, login por token)
+- Visão de usuários, sessões, compartilhamentos e storage
 
 ---
 

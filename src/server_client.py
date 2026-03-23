@@ -160,6 +160,42 @@ def create_admin_user(username: str, is_admin: bool = False) -> dict:
     return resp.json()
 
 
+def share_session(session_prefix: str, project: str, share_with: str, message: str = "") -> dict:
+    """Share a session with another user."""
+    import requests
+    url = get_server_url()
+    resp = requests.post(
+        f"{url}/api/sharing/share",
+        headers=_headers(),
+        data={"session_prefix": session_prefix, "project": project, "share_with": share_with, "message": message},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_inbox() -> list:
+    """List sessions shared with the current user."""
+    import requests
+    url = get_server_url()
+    resp = requests.get(f"{url}/api/sharing/inbox", headers=_headers(), timeout=30)
+    resp.raise_for_status()
+    return resp.json().get("shares", [])
+
+
+def download_shared_bundle(share_id: str, out_path: Path) -> Path:
+    """Download a shared bundle to out_path."""
+    import requests
+    url = get_server_url()
+    resp = requests.get(f"{url}/api/sharing/{share_id}/bundle", headers=_headers(), stream=True, timeout=60)
+    resp.raise_for_status()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "wb") as f:
+        for chunk in resp.iter_content(chunk_size=8192):
+            f.write(chunk)
+    return out_path
+
+
 def health_check() -> bool:
     """Return True if server is reachable."""
     try:

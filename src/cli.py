@@ -600,14 +600,8 @@ def _push_single(session_id: str, resolved_repo: str, compress: bool, encrypt: b
     server_url = get_server_url()
     if server_url:
         # Server mode: upload via HTTP
-        try:
-            result = server_push_bundle(Path(final_output), project_name or "default")
-            dest = f"{server_url}/sessions/{result.get('filename', Path(final_output).name)}"
-        except Exception as e:
-            if not auto:
-                click.echo(f"  [WARN] Server push failed ({e}), falling back to git...", err=True)
-            git_sync = GitSync(repo_url=resolved_repo)
-            dest = git_sync.push_bundle(final_output, session_id, label=label, project_name=project_name)
+        result = server_push_bundle(Path(final_output), project_name or "default")
+        dest = f"{server_url}/sessions/{result.get('filename', Path(final_output).name)}"
     else:
         # Git mode
         git_sync = GitSync(repo_url=resolved_repo)
@@ -670,7 +664,8 @@ def sync_push(session_id, session_opt, repo, output, compress, encrypt, auto, ve
     # --all: push every session in the current project directory
     if push_all:
         try:
-            resolved_repo = _resolve_repo(repo)
+            from .server_client import get_server_url as _get_server_url
+            resolved_repo = None if _get_server_url() else _resolve_repo(repo)
             exporter = SessionExporter()
             sessions = exporter.list_sessions(project_path=str(Path.cwd()))
             if not sessions:
@@ -697,7 +692,8 @@ def sync_push(session_id, session_opt, repo, output, compress, encrypt, auto, ve
         return
 
     try:
-        resolved_repo = _resolve_repo(repo)
+        from .server_client import get_server_url as _get_server_url
+        resolved_repo = None if _get_server_url() else _resolve_repo(repo)
         exporter = SessionExporter()
 
         # No session_id in auto mode: cannot use interactive picker
@@ -804,22 +800,30 @@ def sync_push(session_id, session_opt, repo, output, compress, encrypt, auto, ve
                 final_output = encrypted_output
                 logger.log_app(f"Bundle encrypted: {final_output}")
 
-        # 4. Push to Git repo
-        if not auto:
-            click.echo(f"\nPushing to Git repository: {resolved_repo}")
-        logger.log_app(f"Pushing to {resolved_repo}...")
-        git_sync = GitSync(repo_url=resolved_repo)
-        dest = git_sync.push_bundle(final_output, session_id, label=label, project_name=project_name)
-
-        logger.log_app(f"Git push OK: {Path(dest).name}")
-
-        # Save local backup (silent — does not affect the main flow on failure)
-        try:
-            backup_path = git_sync.save_local_backup(final_output, session_id[:8], project_name=project_name)
-            if backup_path:
-                logger.log_app(f"Local backup saved: {Path(backup_path).name}")
-        except Exception:
-            pass
+        # 4. Push to server or Git repo
+        from .server_client import get_server_url, push_bundle as server_push_bundle
+        _server_url = get_server_url()
+        if _server_url:
+            if not auto:
+                click.echo(f"\nPushing to server: {_server_url}")
+            logger.log_app(f"Pushing to server {_server_url}...")
+            result = server_push_bundle(Path(final_output), project_name or "default")
+            dest = f"{_server_url}/sessions/{result.get('filename', Path(final_output).name)}"
+            logger.log_app(f"Server push OK: {result.get('filename')}")
+        else:
+            if not auto:
+                click.echo(f"\nPushing to Git repository: {resolved_repo}")
+            logger.log_app(f"Pushing to {resolved_repo}...")
+            git_sync = GitSync(repo_url=resolved_repo)
+            dest = git_sync.push_bundle(final_output, session_id, label=label, project_name=project_name)
+            logger.log_app(f"Git push OK: {Path(dest).name}")
+            # Save local backup (silent — does not affect the main flow on failure)
+            try:
+                backup_path = git_sync.save_local_backup(final_output, session_id[:8], project_name=project_name)
+                if backup_path:
+                    logger.log_app(f"Local backup saved: {Path(backup_path).name}")
+            except Exception:
+                pass
 
         # Clean up temp bundle files
         try:
@@ -1198,6 +1202,97 @@ def sync_list(repo):
 
     except Exception as e:
         click.echo(f"[ERROR] Error: {e}", err=True)
+        raise click.Abort()
+
+
+@cli.command('share')
+@click.argument('session_prefix')
+@click.option('--with', 'share_with', required=True, help='Username to share with (or * for everyone)')
+@click.option('--message', default='', help='Optional message to the recipient')
+def share_cmd(session_prefix, share_with, message):
+    """Share a session with another user on the server.
+
+    \b
+    Examples:
+      claude-sync share 097f3474 --with maria
+      claude-sync share 097f3474 --with '*'
+    """
+    from .server_client import get_server_url, share_session, list_sessions as server_list_sessions
+
+    if not get_server_url():
+        click.echo("[ERROR] No server configured. Run: claude-sync server-url <url>", err=True)
+        raise click.Abort()
+
+    # Find the project name for this session
+    exporter = SessionExporter()
+    project = "default"
+    project_dir = exporter.find_project_by_session(session_prefix)
+    if project_dir:
+        project = exporter._decode_project_name(project_dir.name)
+
+    try:
+        result = share_session(session_prefix, project, share_with, message)
+        click.echo(f"[OK] Session {session_prefix[:8]} shared with '{share_with}'")
+        click.echo(f"     Share ID: {result['share_id']}")
+    except Exception as e:
+        click.echo(f"[ERROR] {e}", err=True)
+        raise click.Abort()
+
+
+@cli.command('inbox')
+@click.option('--pull', 'pull_share_id', default=None, metavar='SHARE_ID', help='Download a shared session by share ID')
+@click.option('--project-path', default=None, help='Where to import the session (default: current directory)')
+def inbox_cmd(pull_share_id, project_path):
+    """List or download sessions shared with you.
+
+    \b
+    Examples:
+      claude-sync inbox                          # list shared sessions
+      claude-sync inbox --pull SHARE_ID          # download a shared session
+    """
+    from .server_client import get_server_url, get_inbox, download_shared_bundle
+
+    if not get_server_url():
+        click.echo("[ERROR] No server configured. Run: claude-sync server-url <url>", err=True)
+        raise click.Abort()
+
+    if pull_share_id:
+        # Download and import the shared bundle
+        import tempfile
+        tmp = Path(tempfile.mkdtemp(prefix="claude-sync-inbox-")) / f"{pull_share_id}.bundle.gz"
+        try:
+            download_shared_bundle(pull_share_id, tmp)
+            resolved = project_path or str(Path.cwd())
+            importer = SessionImporter()
+            importer.import_session(str(tmp), force=True, project_path_override=resolved)
+            click.echo(f"[OK] Session imported into: {resolved}")
+        except Exception as e:
+            click.echo(f"[ERROR] {e}", err=True)
+            raise click.Abort()
+        finally:
+            try:
+                import shutil
+                shutil.rmtree(tmp.parent, ignore_errors=True)
+            except Exception:
+                pass
+        return
+
+    # List inbox
+    try:
+        shares = get_inbox()
+        if not shares:
+            click.echo("[--] No sessions shared with you.")
+            return
+        click.echo(f"Sessions shared with you ({len(shares)}):\n")
+        for s in shares:
+            created = s.get("created_at", "")[:10]
+            msg = f"  — {s['message']}" if s.get("message") else ""
+            click.echo(f"  {s['share_id'][:8]}  {s['shared_by']:12}  {s['project']:20}  {created}{msg}")
+            click.echo(f"           Session: {s['session_prefix']}")
+            click.echo(f"           Pull:    claude-sync inbox --pull {s['share_id']}")
+            click.echo()
+    except Exception as e:
+        click.echo(f"[ERROR] {e}", err=True)
         raise click.Abort()
 
 

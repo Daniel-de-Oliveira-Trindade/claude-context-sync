@@ -57,3 +57,19 @@ export async function setProjectsPath(value: string): Promise<void> {
 export async function setSetupCompleted(value: boolean): Promise<void> {
   await cfg().update('setupCompleted', value, vscode.ConfigurationTarget.Global);
 }
+
+export function getServerUrl(): string {
+  return cfg().get<string>('serverUrl', '');
+}
+
+export function getServerToken(): string {
+  return cfg().get<string>('serverToken', '');
+}
+
+export function isAutoSync(): boolean {
+  return cfg().get<boolean>('autoSync', false);
+}
+
+export async function setAutoSync(value: boolean): Promise<void> {
+  await cfg().update('autoSync', value, vscode.ConfigurationTarget.Global);
+}

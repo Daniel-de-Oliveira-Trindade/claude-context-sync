@@ -9,7 +9,8 @@ import { registerPullCommand } from './commands/pullCommand';
 import { registerConfigCommands } from './commands/configCommands';
 import { registerHooksCommands } from './commands/hooksCommands';
 import { registerRestoreBackupCommand } from './commands/restoreBackupCommand';
-import { getCliPath, isSetupCompleted } from './config/settings';
+import { registerAutoSyncCommand, AutoSyncStatusBar } from './commands/autoSyncCommand';
+import { getCliPath, getServerUrl, getServerToken, isAutoSync, isSetupCompleted } from './config/settings';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const outputChannel = vscode.window.createOutputChannel('Claude Sync');
@@ -40,6 +41,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const runner = new CliRunner(cliPath, outputChannel);
 
+  // Sync server config to CLI if configured
+  const serverUrl = getServerUrl();
+  if (serverUrl) {
+    runner.run(['server-url', serverUrl]).catch(() => {});
+    const token = getServerToken();
+    if (token) {
+      runner.run(['token', '--save', token]).catch(() => {});
+    }
+  }
+
   // Tree providers
   const localTree = new SessionTreeProvider(runner);
   const remoteTree = new RemoteTreeProvider(runner);
@@ -51,6 +62,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // Status bar
   const statusBar = new StatusBarManager(context);
+
+  // Auto sync status bar + command
+  const autoSyncBar = new AutoSyncStatusBar(context);
+  registerAutoSyncCommand(context, runner, autoSyncBar);
+
+  // If autoSync was ON when VSCode closed, restart the daemon
+  if (isAutoSync()) {
+    runner.run(['watch', '--daemon']).catch(() => {});
+  }
 
   // Register all commands
   registerPushCommand(context, runner, localTree, statusBar, outputChannel);

@@ -1,7 +1,7 @@
 import * as cp from 'child_process';
 import * as vscode from 'vscode';
 import { CliResult } from '../types';
-import { getDefaultRepo } from '../config/settings';
+import { getDefaultRepo, getServerUrl } from '../config/settings';
 
 export class CliRunner {
   constructor(
@@ -15,6 +15,8 @@ export class CliRunner {
 
   /** Inject --repo <url> after the subcommand when a defaultRepo is configured and not already present. */
   private injectRepo(args: string[]): string[] {
+    // Don't inject --repo when server mode is active
+    if (getServerUrl()) { return args; }
     const repo = getDefaultRepo();
     if (!repo || args.includes('--repo')) { return args; }
     // Only inject --repo for commands that accept it

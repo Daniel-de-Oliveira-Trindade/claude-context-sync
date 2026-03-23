@@ -6,7 +6,7 @@
 
 **Claude Context Sync** is a CLI tool that exports and imports Claude Code sessions between devices. It solves the problem of absolute path differences between machines using a smart path-transformation system.
 
-**Current version: 0.5.1**
+**Current version: 0.6.0**
 
 **Features:**
 - Full session transfer: messages, file-history, and todos
@@ -14,6 +14,7 @@
 - gzip compression (`--compress`) — reduces bundle size by up to 86%
 - Automatic progress bars for large sessions
 - Git-based sync via private repository (`sync-push` / `sync-pull`)
+- **Central server mode** — HTTP server replaces/complements Git when `server-url` is configured
 - Interactive session picker — no need to copy/paste UUIDs
 - `sync-push --all` — push all sessions from the current project at once
 - `sync-pull --all` — pull all available bundles from the repository at once
@@ -24,6 +25,8 @@
 - **Optional AES-256-GCM encryption** — passphrase-based, no raw key files to manage (`--encrypt`)
 - **Structured logs** — `hook.log` for automatic sync, `--verbose` for manual commands
 - **Local bundle backup** — every push/pull saves a copy in `~/.claude-sync-git/backups/` for local rollback
+- **File watcher daemon** — auto-push on session change (`watch --daemon`)
+- **Session sharing** — share sessions with other users on the same server (`share` / `inbox`)
 
 > **Platform support:** Fully tested on Windows. Linux and macOS binaries available via the VSCode extension (bundled) and GitHub Actions releases.
 
@@ -42,10 +45,12 @@ The extension includes the CLI bundled inside — no Python or pip installation 
 ### What the extension provides
 
 - **Local Sessions panel** — browse all your Claude Code sessions grouped by project
-- **Remote Bundles panel** — see all sessions stored in your Git repo
+- **Remote Bundles panel** — see all sessions stored in your Git repo or central server
 - **Push / Pull buttons** — sync sessions with one click directly from the sidebar
 - **Backup history** — view and restore previous backups of any session by date
-- **Settings UI** — configure everything without touching the terminal
+- **Auto Sync toggle** — start/stop the file watcher daemon from the sidebar
+- **Status bar** — shows "Auto Sync: ON / OFF" (clickable)
+- **Settings UI** — configure everything without touching the terminal, including `serverUrl` and `serverToken`
 
 ### Quick start with the extension
 
@@ -656,6 +661,83 @@ If you prefer to type the passphrase manually each time (without saving a key), 
 
 ---
 
+### `claude-sync watch`
+
+Start a file watcher daemon that auto-pushes sessions whenever they change.
+
+```bash
+claude-sync watch                    # run in foreground
+claude-sync watch --daemon           # start background daemon
+claude-sync watch --status           # check if daemon is running
+claude-sync watch --stop             # stop the daemon
+claude-sync watch --debounce N       # debounce delay in seconds (default: 30)
+```
+
+The daemon monitors `~/.claude/projects/**/*.jsonl`. When a session file is modified, it waits for the debounce period to expire and then runs `sync-push --session {id} --auto --compress`. PID is saved at `~/.claude-context-sync/watch.pid`; log at `~/.claude-context-sync/logs/watch.log`.
+
+---
+
+### `claude-sync server-url`
+
+Configure the central server URL. When set, `sync-push`, `sync-pull`, and `sync-list` use HTTP instead of Git.
+
+```bash
+claude-sync server-url                              # show current URL
+claude-sync server-url https://sync.example.com    # set URL
+```
+
+Git remains as the fallback if `server-url` is not configured.
+
+---
+
+### `claude-sync token`
+
+Manage authentication tokens for the central server.
+
+```bash
+claude-sync token --save TOKEN          # save a token received from the admin
+claude-sync token --show                # display the saved token (masked)
+claude-sync token --create-user NAME    # create a new user token (admin only)
+```
+
+---
+
+### `claude-sync share`
+
+Share a session with another user on the same server.
+
+```bash
+claude-sync share SESSION_PREFIX --with USER [--message MSG]
+```
+
+```bash
+claude-sync share 097f3474 --with maria
+claude-sync share 097f3474 --with maria --message "Here's the auth bug context"
+```
+
+The recipient sees the share in their `inbox`. Sharing requires `server-url` to be configured.
+
+---
+
+### `claude-sync inbox`
+
+List sessions shared with you, or download one.
+
+```bash
+claude-sync inbox                                           # list pending shares
+claude-sync inbox --pull SHARE_ID                          # download a shared session
+claude-sync inbox --pull SHARE_ID --project-path PATH      # download to a specific project folder
+```
+
+```bash
+claude-sync inbox
+# → [abc123] usuario-a | my-app | 2026-03-20 | "Fix the auth bug"
+
+claude-sync inbox --pull abc123 --project-path "C:/Projects/my-app"
+```
+
+---
+
 ### `claude-sync devices`
 
 List configured devices.
@@ -861,7 +943,7 @@ The passphrase entered does not match the one used to encrypt the bundle. Make s
 - [x] `hooks-install --force` to update existing hooks; status display when already installed
 - [x] Session discovery via direct `.jsonl` scan (no `sessions-index.json` required)
 
-### v0.5.1 (current)
+### v0.5.1
 - [x] `sync-push --all` — push all sessions from the current project at once
 - [x] `sync-pull --all` — pull all available bundles from the repository at once
 - [x] Project name correctly decoded from Claude's encoded directory names
@@ -869,10 +951,19 @@ The passphrase entered does not match the one used to encrypt the bundle. Make s
 - [x] VSCode extension warns on project mismatch when pulling a remote session
 - [x] Linux and macOS binaries built via GitHub Actions and bundled in the extension
 
-### v1.0.0 (future)
-- [ ] Optional cloud backend
-- [ ] Web dashboard
-- [ ] Automatic conflict resolution
+### v0.6.0 (current)
+- [x] File watcher daemon (`watch --daemon` / `--stop` / `--status` / `--debounce`)
+- [x] Central server mode — FastAPI server with push/pull/list/delete, token auth, admin dashboard
+- [x] `server-url` command — configure HTTP backend; Git used as fallback when not set
+- [x] `token` command — save/show tokens, create users (admin)
+- [x] `share` command — share a session with a specific user on the server
+- [x] `inbox` command — list and download sessions shared with you
+- [x] VSCode extension: Auto Sync toggle button in Local Sessions toolbar
+- [x] VSCode extension: status bar item "Auto Sync: ON / OFF" (clickable)
+- [x] VSCode extension: `serverUrl` and `serverToken` settings, synced to CLI on activation
+- [x] VSCode extension: restarts watcher daemon on activation when `autoSync` was ON
+- [x] Docker support for the central server (Dockerfile + docker-compose.yml)
+- [x] Admin web dashboard at `/admin/` with session management and sharing overview
 
 ---
 
