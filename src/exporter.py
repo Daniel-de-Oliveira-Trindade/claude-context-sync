@@ -466,5 +466,7 @@ class SessionExporter:
         Returns:
             Encoded name (e.g. c--users-alice-documents-projects-my-app)
         """
-        encoded = path.lower().replace("\\", "-").replace("/", "-").replace(":", "-")
+        encoded = path.replace("\\", "-").replace("/", "-").replace(":", "-")
+        if encoded and encoded[0].isupper():
+            encoded = encoded[0].lower() + encoded[1:]
         return encoded

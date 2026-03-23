@@ -321,10 +321,6 @@ class SessionImporter:
         if project_path_override:
             project_path = str(Path(project_path_override).resolve())
             metadata['projectPath'] = project_path
-            project_hash = self._encode_path(project_path)
-            metadata['fullPath'] = str(
-                self.claude_dir / "projects" / project_hash / f"{session_id}.jsonl"
-            )
             print(f"Target project path: {project_path} (overridden)")
         else:
             project_path = metadata.get('projectPath', str(Path.cwd()))
@@ -335,6 +331,9 @@ class SessionImporter:
         project_hash = self._encode_path(project_path)
         project_dir = self.claude_dir / "projects" / project_hash
         project_dir.mkdir(parents=True, exist_ok=True)
+
+        # Always update fullPath to reflect the actual local path (not the source machine's path)
+        metadata['fullPath'] = str(project_dir / f"{session_id}.jsonl")
 
         print(f"Project directory: {project_dir}")
 
@@ -385,11 +384,16 @@ class SessionImporter:
         """
         Encode a project path to a directory name (Claude Code's format).
 
+        Claude Code only lowercases the drive letter (e.g. C -> c), preserving
+        the case of the rest of the path.
+
         Args:
             path: Project path
 
         Returns:
-            Encoded directory name
+            Encoded directory name (e.g. c--Users-alice-Documents-projects-my-app)
         """
-        encoded = path.lower().replace("\\", "-").replace("/", "-").replace(":", "-")
+        encoded = path.replace("\\", "-").replace("/", "-").replace(":", "-")
+        if encoded and encoded[0].isupper():
+            encoded = encoded[0].lower() + encoded[1:]
         return encoded

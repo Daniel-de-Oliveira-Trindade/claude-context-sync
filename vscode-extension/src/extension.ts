@@ -41,10 +41,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const runner = new CliRunner(cliPath, outputChannel);
 
-  // Sync server config to CLI if configured
+  // Sync server config to CLI (always sync so clearing the setting also clears the CLI)
   const serverUrl = getServerUrl();
+  runner.run(['server-url', serverUrl]).catch(() => {});
   if (serverUrl) {
-    runner.run(['server-url', serverUrl]).catch(() => {});
     const token = getServerToken();
     if (token) {
       runner.run(['token', '--save', token]).catch(() => {});
