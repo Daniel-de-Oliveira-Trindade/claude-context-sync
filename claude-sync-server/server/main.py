@@ -13,7 +13,15 @@ Endpoints:
   GET    /api/admin/users                  → list users (admin)
   GET    /api/admin/sessions               → all sessions, all users (admin)
   GET    /api/admin/dashboard              → storage stats (admin)
+  GET    /api/admin/shares                 → list all shares (admin)
 
+  POST   /api/sharing/share                → share a session with another user
+  GET    /api/sharing/inbox                → list sessions shared with me
+  DELETE /api/sharing/{share_id}           → revoke a share
+  POST   /api/sharing/{share_id}/apply     → generate CLAUDE.md content for a shared session
+  GET    /api/sharing/{share_id}/bundle    → download the shared bundle
+
+  GET    /admin/                           → web admin dashboard
   GET    /health                           → liveness check
 """
 
@@ -22,9 +30,12 @@ from fastapi.responses import FileResponse, JSONResponse
 from typing import Optional
 import os
 
-from . import auth, storage, git_backup
+from . import auth, storage, git_backup, sharing, dashboard
 
 app = FastAPI(title="Claude Sync Server", version="1.0.0")
+
+# Mount admin web dashboard
+app.include_router(dashboard.router, prefix="/admin")
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +182,151 @@ def admin_list_sessions(admin: dict = Depends(auth.require_admin)):
 
 
 @app.get("/api/admin/dashboard")
-def dashboard(admin: dict = Depends(auth.require_admin)):
+def admin_dashboard(admin: dict = Depends(auth.require_admin)):
     stats = storage.get_storage_stats()
     stats["total_mb"] = round(stats["total_bytes"] / (1024 * 1024), 2)
     return stats
+
+
+@app.get("/api/admin/shares")
+def admin_list_shares(admin: dict = Depends(auth.require_admin)):
+    """List all shares (admin only)."""
+    return {"shares": sharing.list_all_shares()}
+
+
+# ---------------------------------------------------------------------------
+# Sharing endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/api/sharing/share")
+def share_session_endpoint(
+    session_prefix: str = Form(...),
+    project: str = Form(...),
+    share_with: str = Form(...),
+    message: str = Form(""),
+    user: dict = Depends(auth.get_current_user),
+):
+    """Share a session bundle with another user (or '*' for everyone)."""
+    # Verify the session prefix exists for this user
+    bundle = storage.get_latest_bundle(user["username"], session_prefix)
+    if bundle is None:
+        raise HTTPException(status_code=404, detail=f"No bundle found for prefix '{session_prefix}'")
+
+    share_id = sharing.create_share(
+        session_prefix=session_prefix,
+        project=project,
+        shared_by=user["username"],
+        shared_with=share_with,
+        message=message,
+    )
+    return {
+        "ok": True,
+        "share_id": share_id,
+        "session_prefix": session_prefix,
+        "shared_with": share_with,
+    }
+
+
+@app.get("/api/sharing/inbox")
+def sharing_inbox(user: dict = Depends(auth.get_current_user)):
+    """List sessions shared with the current user."""
+    return {"shares": sharing.list_inbox(user["username"])}
+
+
+@app.delete("/api/sharing/{share_id}")
+def revoke_share(
+    share_id: str,
+    user: dict = Depends(auth.get_current_user),
+):
+    """Revoke a share. Owner or admin can revoke."""
+    try:
+        sharing.delete_share(share_id, user["username"], user["is_admin"])
+    except ValueError as e:
+        raise HTTPException(status_code=404 if "not found" in str(e) else 403, detail=str(e))
+    return {"ok": True, "revoked": share_id}
+
+
+@app.post("/api/sharing/{share_id}/apply")
+def apply_share(
+    share_id: str,
+    user: dict = Depends(auth.get_current_user),
+):
+    """Return CLAUDE.md content for injecting a shared session's context."""
+    share = sharing.get_share(share_id)
+    if share is None:
+        raise HTTPException(status_code=404, detail="Share not found")
+
+    # Check access
+    if share["shared_with"] not in (user["username"], "*") and not user["is_admin"]:
+        raise HTTPException(status_code=403, detail="Not authorized to access this share")
+
+    # Get bundle path from the owner's storage
+    bundle_path = storage.get_latest_bundle(share["shared_by"], share["session_prefix"])
+    if bundle_path is None:
+        raise HTTPException(status_code=404, detail="Bundle not found on server")
+
+    # Extract context from bundle
+    import json as _json
+    import gzip
+
+    try:
+        raw = bundle_path.read_bytes()
+        # Try gzip first
+        try:
+            raw = gzip.decompress(raw)
+        except Exception:
+            pass
+        data = _json.loads(raw)
+        messages = data.get("messages", [])
+        # Last 5 human messages, truncated to 200 chars
+        human_msgs = [
+            m.get("content", "")[:200]
+            for m in messages
+            if m.get("role") == "human"
+        ][-5:]
+    except Exception:
+        human_msgs = []
+
+    from datetime import datetime
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    last_activity = share.get("created_at", "")[:19].replace("T", " ")
+
+    lines = [
+        "<!-- claude-sync:start -->",
+        f"## Team Context (auto-updated: {now})",
+        "",
+        f"### {share['shared_by']} — {share['project']}",
+        f"Last activity: {last_activity}",
+    ]
+    if human_msgs:
+        lines.append("Recent messages:")
+        for msg in human_msgs:
+            lines.append(f"- {msg}")
+    lines.append("<!-- claude-sync:end -->")
+
+    return {"ok": True, "claude_md_content": "\n".join(lines), "share_id": share_id}
+
+
+@app.get("/api/sharing/{share_id}/bundle")
+def download_shared_bundle(
+    share_id: str,
+    user: dict = Depends(auth.get_current_user),
+):
+    """Download the bundle associated with a share."""
+    share = sharing.get_share(share_id)
+    if share is None:
+        raise HTTPException(status_code=404, detail="Share not found")
+
+    # Check access
+    if share["shared_with"] not in (user["username"], "*") and not user["is_admin"]:
+        raise HTTPException(status_code=403, detail="Not authorized to access this share")
+
+    bundle_path = storage.get_latest_bundle(share["shared_by"], share["session_prefix"])
+    if bundle_path is None:
+        raise HTTPException(status_code=404, detail="Bundle not found")
+
+    return FileResponse(
+        path=str(bundle_path),
+        filename=bundle_path.name,
+        media_type="application/octet-stream",
+    )

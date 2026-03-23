@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Sessions — Claude Sync Admin{% endblock %}
+{% block content %}
+<h1>All Sessions</h1>
+
+<div class="table-wrap">
+  <div class="table-header">
+    <h2 style="margin:0;">Bundles ({{ bundles | length }})</h2>
+  </div>
+  {% if bundles %}
+  <table>
+    <thead>
+      <tr>
+        <th>User</th>
+        <th>Project</th>
+        <th>Session Prefix</th>
+        <th>Filename</th>
+        <th>Size</th>
+        <th>Modified</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for b in bundles %}
+      <tr>
+        <td class="mono">{{ b.username }}</td>
+        <td>{{ b.project }}</td>
+        <td><span class="mono">{{ b.session_prefix }}</span></td>
+        <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ b.filename }}">
+          <span class="mono">{{ b.filename }}</span>
+        </td>
+        <td>{{ "%.1f" | format(b.size / 1024) }} KB</td>
+        <td>{{ b.modified[:19] | replace("T", " ") }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="empty">No bundles stored yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

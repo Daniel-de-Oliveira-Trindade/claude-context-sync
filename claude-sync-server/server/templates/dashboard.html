@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Claude Sync Admin{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+
+<div class="cards">
+  <div class="card">
+    <div class="label">Users</div>
+    <div class="value">{{ stats.users }}</div>
+    <div class="unit">registered</div>
+  </div>
+  <div class="card">
+    <div class="label">Bundles</div>
+    <div class="value">{{ stats.total_bundles }}</div>
+    <div class="unit">stored</div>
+  </div>
+  <div class="card">
+    <div class="label">Storage</div>
+    <div class="value">{{ stats.total_mb }}</div>
+    <div class="unit">MB used</div>
+  </div>
+  <div class="card">
+    <div class="label">Active Shares</div>
+    <div class="value">{{ stats.total_shares }}</div>
+    <div class="unit">shared sessions</div>
+  </div>
+</div>
+
+<h2>Quick Links</h2>
+<div style="display:flex;gap:12px;flex-wrap:wrap;">
+  <a href="/admin/users" class="btn btn-ghost">Manage Users</a>
+  <a href="/admin/sessions" class="btn btn-ghost">Browse Sessions</a>
+  <a href="/admin/shares" class="btn btn-ghost">View Shares</a>
+</div>
+{% endblock %}

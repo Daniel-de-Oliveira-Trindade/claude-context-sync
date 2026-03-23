@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Shares — Claude Sync Admin{% endblock %}
+{% block content %}
+<h1>All Shares</h1>
+
+<div class="table-wrap">
+  <div class="table-header">
+    <h2 style="margin:0;">Active Shares ({{ shares | length }})</h2>
+  </div>
+  {% if shares %}
+  <table>
+    <thead>
+      <tr>
+        <th>Share ID</th>
+        <th>Session</th>
+        <th>Project</th>
+        <th>From</th>
+        <th>To</th>
+        <th>Created</th>
+        <th>Message</th>
+        <th>Action</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in shares %}
+      <tr>
+        <td><span class="mono">{{ s.share_id }}</span></td>
+        <td><span class="mono">{{ s.session_prefix }}</span></td>
+        <td>{{ s.project }}</td>
+        <td class="mono">{{ s.shared_by }}</td>
+        <td>
+          {% if s.shared_with == "*" %}
+            <span class="badge badge-yellow">everyone</span>
+          {% else %}
+            <span class="mono">{{ s.shared_with }}</span>
+          {% endif %}
+        </td>
+        <td>{{ s.created_at[:19] | replace("T", " ") }}</td>
+        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ s.message }}">
+          {{ s.message or "—" }}
+        </td>
+        <td>
+          <form method="POST" action="/admin/shares/{{ s.share_id }}/revoke" class="inline"
+                onsubmit="return confirm('Revoke share {{ s.share_id }}?');">
+            <button type="submit" class="btn btn-red">Revoke</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="empty">No active shares.</p>
+  {% endif %}
+</div>
+{% endblock %}

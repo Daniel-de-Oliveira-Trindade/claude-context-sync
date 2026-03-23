@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Claude Sync Admin{% endblock %}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #1e1e2e;
+      color: #cdd6f4;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
+    }
+    a { color: #89b4fa; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* Nav */
+    nav {
+      background: #181825;
+      border-bottom: 1px solid #313244;
+      padding: 0 24px;
+      display: flex;
+      align-items: center;
+      height: 52px;
+      gap: 8px;
+    }
+    nav .brand {
+      font-weight: 700;
+      color: #50fa7b;
+      font-size: 16px;
+      margin-right: 24px;
+    }
+    nav a {
+      color: #bac2de;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+    nav a:hover, nav a.active {
+      background: #313244;
+      color: #cdd6f4;
+      text-decoration: none;
+    }
+    nav .spacer { flex: 1; }
+    nav .logout {
+      color: #f38ba8;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+
+    /* Main content */
+    main {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 32px 24px;
+    }
+    h1 {
+      font-size: 22px;
+      font-weight: 600;
+      color: #cdd6f4;
+      margin-bottom: 24px;
+    }
+    h2 {
+      font-size: 16px;
+      font-weight: 600;
+      color: #bac2de;
+      margin-bottom: 12px;
+    }
+
+    /* Cards */
+    .cards {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-bottom: 32px;
+    }
+    .card {
+      background: #181825;
+      border: 1px solid #313244;
+      border-radius: 10px;
+      padding: 20px 24px;
+      min-width: 160px;
+      flex: 1;
+    }
+    .card .label {
+      font-size: 12px;
+      color: #6c7086;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+    }
+    .card .value {
+      font-size: 32px;
+      font-weight: 700;
+      color: #50fa7b;
+    }
+    .card .unit {
+      font-size: 13px;
+      color: #6c7086;
+      margin-top: 2px;
+    }
+
+    /* Tables */
+    .table-wrap {
+      background: #181825;
+      border: 1px solid #313244;
+      border-radius: 10px;
+      overflow: hidden;
+      margin-bottom: 24px;
+    }
+    .table-wrap .table-header {
+      padding: 14px 18px;
+      border-bottom: 1px solid #313244;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th {
+      text-align: left;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #6c7086;
+      padding: 10px 18px;
+      border-bottom: 1px solid #313244;
+    }
+    td {
+      padding: 10px 18px;
+      border-bottom: 1px solid #1e1e2e;
+      vertical-align: middle;
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #1e1e2e; }
+    .mono { font-family: 'Cascadia Code', 'Consolas', monospace; font-size: 12px; color: #a6e3a1; }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .badge-green { background: #1a3a24; color: #50fa7b; }
+    .badge-blue  { background: #1a2a3a; color: #89b4fa; }
+    .badge-red   { background: #3a1a1a; color: #f38ba8; }
+    .badge-yellow { background: #3a3a1a; color: #f9e2af; }
+
+    /* Buttons / forms */
+    .btn {
+      display: inline-block;
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      text-align: center;
+    }
+    .btn-green { background: #50fa7b; color: #1e1e2e; }
+    .btn-green:hover { background: #40c865; }
+    .btn-red { background: #f38ba8; color: #1e1e2e; }
+    .btn-red:hover { background: #d97890; }
+    .btn-ghost { background: #313244; color: #cdd6f4; }
+    .btn-ghost:hover { background: #45475a; }
+
+    form.inline { display: inline; }
+    input[type="text"], input[type="password"] {
+      background: #313244;
+      border: 1px solid #45475a;
+      border-radius: 6px;
+      color: #cdd6f4;
+      padding: 7px 12px;
+      font-size: 13px;
+      outline: none;
+    }
+    input:focus { border-color: #50fa7b; }
+
+    /* Alerts */
+    .alert {
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      font-size: 13px;
+    }
+    .alert-error { background: #3a1a1a; border: 1px solid #f38ba8; color: #f38ba8; }
+    .alert-success { background: #1a3a24; border: 1px solid #50fa7b; color: #50fa7b; }
+
+    .empty { color: #6c7086; padding: 24px 18px; font-style: italic; }
+  </style>
+</head>
+<body>
+  <nav>
+    <span class="brand">Claude Sync</span>
+    <a href="/admin/" {% if active == 'dashboard' %}class="active"{% endif %}>Dashboard</a>
+    <a href="/admin/users" {% if active == 'users' %}class="active"{% endif %}>Users</a>
+    <a href="/admin/sessions" {% if active == 'sessions' %}class="active"{% endif %}>Sessions</a>
+    <a href="/admin/shares" {% if active == 'shares' %}class="active"{% endif %}>Shares</a>
+    <span class="spacer"></span>
+    <a href="/admin/login" class="logout">Logout</a>
+  </nav>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

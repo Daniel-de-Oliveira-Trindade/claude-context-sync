@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Users — Claude Sync Admin{% endblock %}
+{% block content %}
+<h1>Users</h1>
+
+{% if error %}
+  <div class="alert alert-error">{{ error }}</div>
+{% endif %}
+{% if success %}
+  <div class="alert alert-success">{{ success }}</div>
+{% endif %}
+
+<div class="table-wrap" style="margin-bottom:32px;">
+  <div class="table-header">
+    <h2 style="margin:0;">Create User</h2>
+  </div>
+  <div style="padding:16px 18px;">
+    <form method="POST" action="/admin/users/create" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+      <input type="text" name="username" placeholder="Username" required style="width:200px;">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+        <input type="checkbox" name="is_admin" value="true" style="width:14px;height:14px;">
+        <span>Admin</span>
+      </label>
+      <button type="submit" class="btn btn-green">Create</button>
+    </form>
+    {% if new_token %}
+      <div class="alert alert-success" style="margin-top:14px;">
+        User created. Token (save it now — shown only once):<br>
+        <span class="mono" style="font-size:13px;word-break:break-all;">{{ new_token }}</span>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="table-wrap">
+  <div class="table-header">
+    <h2 style="margin:0;">All Users</h2>
+  </div>
+  {% if users %}
+  <table>
+    <thead>
+      <tr>
+        <th>Username</th>
+        <th>Role</th>
+        <th>Created</th>
+        <th>Action</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for u in users %}
+      <tr>
+        <td class="mono">{{ u.username }}</td>
+        <td>
+          {% if u.is_admin %}
+            <span class="badge badge-yellow">admin</span>
+          {% else %}
+            <span class="badge badge-blue">user</span>
+          {% endif %}
+        </td>
+        <td>{{ u.created_at[:19] | replace("T", " ") }}</td>
+        <td>
+          <form method="POST" action="/admin/users/{{ u.username }}/delete" class="inline"
+                onsubmit="return confirm('Delete user {{ u.username }}?');">
+            <button type="submit" class="btn btn-red">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p class="empty">No users found.</p>
+  {% endif %}
+</div>
+{% endblock %}

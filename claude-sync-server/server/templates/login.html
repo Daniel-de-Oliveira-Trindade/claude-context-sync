@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Login — Claude Sync</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #1e1e2e;
+      color: #cdd6f4;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+    .box {
+      background: #181825;
+      border: 1px solid #313244;
+      border-radius: 12px;
+      padding: 40px;
+      width: 360px;
+    }
+    h1 {
+      font-size: 20px;
+      font-weight: 700;
+      color: #50fa7b;
+      margin-bottom: 8px;
+    }
+    p { color: #6c7086; font-size: 13px; margin-bottom: 24px; }
+    label { display: block; font-size: 12px; color: #bac2de; margin-bottom: 6px; }
+    input[type="password"] {
+      width: 100%;
+      background: #313244;
+      border: 1px solid #45475a;
+      border-radius: 6px;
+      color: #cdd6f4;
+      padding: 9px 12px;
+      font-size: 14px;
+      outline: none;
+      margin-bottom: 20px;
+    }
+    input:focus { border-color: #50fa7b; }
+    button {
+      width: 100%;
+      background: #50fa7b;
+      color: #1e1e2e;
+      border: none;
+      border-radius: 6px;
+      padding: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover { background: #40c865; }
+    .error {
+      background: #3a1a1a;
+      border: 1px solid #f38ba8;
+      color: #f38ba8;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 13px;
+      margin-bottom: 16px;
+    }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>Claude Sync</h1>
+    <p>Admin Dashboard — enter your admin token to continue.</p>
+    {% if error %}
+      <div class="error">{{ error }}</div>
+    {% endif %}
+    <form method="POST" action="/admin/login">
+      <label for="token">Admin Token</label>
+      <input type="password" id="token" name="token" placeholder="Paste admin token here" autofocus required>
+      <button type="submit">Login</button>
+    </form>
+  </div>
+</body>
+</html>
