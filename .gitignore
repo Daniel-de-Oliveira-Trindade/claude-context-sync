@@ -34,3 +34,4 @@ test_output/
 
 # pip install -e artifacts
 *.egg-info/
+backups/
